@@ -1,6 +1,6 @@
 use governor::Quota;
 use rocket::serde::{json::Json, Deserialize};
-use rocket::{catchers, get, launch, post, routes};
+use rocket::{catchers, fairing, get, launch, post, routes};
 use rocket_db_pools::{sqlx, Connection, Database};
 use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor};
 
@@ -64,16 +64,25 @@ impl<'r> rocket::request::FromRequest<'r> for ValidDbToken {
 struct RowInfo {
     location: String,
     token: String,
+    datetime: String,
     amps: f64,
     volts: f64,
     watts: f64,
 }
 
 impl RowInfo {
-    fn new(location: &str, token: &str, amps: f64, volts: f64, watts: f64) -> Self {
+    fn new(
+        location: &str,
+        token: &str,
+        datetime: &str,
+        amps: f64,
+        volts: f64,
+        watts: f64,
+    ) -> Self {
         Self {
             location: location.to_string(),
             token: token.to_string(),
+            datetime: datetime.to_string(),
             amps,
             volts,
             watts,
@@ -82,9 +91,10 @@ impl RowInfo {
 
     fn to_html(&self) -> String {
         format!(
-            "<tr><td>{} ({})</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            "<tr><td>{} ({})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
             self.location,
             simplify_token(&self.token),
+            self.datetime,
             self.amps,
             self.volts,
             self.watts
@@ -92,7 +102,7 @@ impl RowInfo {
     }
 
     fn to_json(&self) -> String {
-        format!("{{\"location\": \"{}\", \"token\": \"{}\", \"amps\": {}, \"volts\": {}, \"watts\": {}}}", self.location, self.token, self.amps, self.volts, self.watts)
+        format!("{{\"location\": \"{}\", \"token\": \"{}\", \"datetime\": \"{}\", \"amps\": {}, \"volts\": {}, \"watts\": {}}}", self.location, self.token, self.datetime, self.amps, self.volts, self.watts)
     }
 }
 
@@ -107,7 +117,7 @@ async fn get_paginated_rows_for_token(
     let db_count = count + 1;
 
     let db_rows = sqlx::query!(
-        "SELECT amps, volts, watts, energy_log.token as token, u.location as location 
+        "SELECT amps, volts, watts, created_at, energy_log.token as token, u.location as location 
         FROM energy_log
         INNER JOIN tokens t
         ON t.token = energy_log.token
@@ -134,6 +144,7 @@ async fn get_paginated_rows_for_token(
         rows.push(RowInfo::new(
             &row.location,
             &row.token,
+            &row.created_at.to_string(),
             row.amps.parse::<f64>().unwrap_or(0f64),
             row.volts.parse::<f64>().unwrap_or(0f64),
             row.watts.parse::<f64>().unwrap_or(0f64),
@@ -178,7 +189,10 @@ impl<'r> rocket::request::FromRequest<'r> for ClientIP {
     async fn from_request(
         request: &'r rocket::Request<'_>,
     ) -> rocket::request::Outcome<Self, Self::Error> {
-        let ip = request.client_ip().map(|ip| ip.to_string()).unwrap_or("Unknown".to_string());
+        let ip = request
+            .client_ip()
+            .map(|ip| ip.to_string())
+            .unwrap_or("Unknown".to_string());
         rocket::request::Outcome::Success(ClientIP(ip))
     }
 }
@@ -288,9 +302,14 @@ async fn index(_ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
 }
 
 #[launch]
-fn rocket() -> _ {
+async fn rocket() -> _ {
     rocket::build()
         .attach(Logs::init())
+        .attach(fairing::AdHoc::on_ignite("Setup DB", |rocket| async {
+            let db = Logs::fetch(&rocket).expect("DB connection");
+            sqlx::migrate!("./migrations").run(&**db).await.unwrap();
+            rocket
+        }))
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],

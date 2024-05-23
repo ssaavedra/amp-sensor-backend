@@ -1,3 +1,7 @@
+[global]
+address = "0.0.0.0"
+port = 7609
+
 [default.databases.sqlite_logs]
 url = "./sqlite.db"
 

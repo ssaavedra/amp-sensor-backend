@@ -11,9 +11,8 @@ log = "0.4.21"
 rocket = { version = "0.5.0", features = ["json"] }
 rocket-governor = { version = "0.2.0-rc.1", features = ["limit_info", "logger"] }
 serde = { version = "1.0.202", features = ["derive"] }
-sqlx = "0.7.4"
+sqlx = { version = "0.7.4", features = ["chrono"] }
 
 [dependencies.rocket_db_pools]
 version = "0.1.0"
 features = ["sqlx_sqlite"]
-
