@@ -1,4 +1,5 @@
 use governor::Quota;
+use rocket::http::ContentType;
 use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
 use rocket_db_pools::{sqlx, Connection, Database};
@@ -236,7 +237,7 @@ async fn list_table_html(
     count: Option<i32>,
     token: ValidDbToken,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
-) -> String {
+) -> (ContentType, String) {
     let page = page.unwrap_or(0);
     let count = count.unwrap_or(10);
 
@@ -261,7 +262,7 @@ async fn list_table_html(
     }
     result.push_str("</body></html>\n");
 
-    result
+    (ContentType::HTML, result)
 }
 
 #[get("/log/<_>/json?<page>&<count>", rank = 1)]
@@ -271,7 +272,7 @@ async fn list_table_json(
     count: Option<i32>,
     token: ValidDbToken,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
-) -> String {
+) -> rocket::response::content::RawJson<String> {
     let page = page.unwrap_or(0);
     let count = count.unwrap_or(10);
 
@@ -293,7 +294,7 @@ async fn list_table_json(
     }
     result.push_str(&format!("\n],\n\"next\": \"{}\"}}\n", next_url));
 
-    result
+    rocket::response::content::RawJson(result)
 }
 
 #[get("/")]
