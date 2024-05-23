@@ -1,0 +1,3 @@
+[default.databases.sqlite_logs]
+url = "./sqlite.db"
+
