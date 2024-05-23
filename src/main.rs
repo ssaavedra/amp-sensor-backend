@@ -66,6 +66,7 @@ struct RowInfo {
     location: String,
     token: String,
     datetime: String,
+    ua: String,
     amps: f64,
     volts: f64,
     watts: f64,
@@ -76,6 +77,7 @@ impl RowInfo {
         location: &str,
         token: &str,
         datetime: &str,
+        ua: &str,
         amps: f64,
         volts: f64,
         watts: f64,
@@ -84,6 +86,7 @@ impl RowInfo {
             location: location.to_string(),
             token: token.to_string(),
             datetime: datetime.to_string(),
+            ua: ua.to_string(),
             amps,
             volts,
             watts,
@@ -92,9 +95,10 @@ impl RowInfo {
 
     fn to_html(&self) -> String {
         format!(
-            "<tr><td>{} ({})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+            "<tr><td>{} ({}/{})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
             self.location,
             simplify_token(&self.token),
+            self.ua,
             self.datetime,
             self.amps,
             self.volts,
@@ -118,7 +122,7 @@ async fn get_paginated_rows_for_token(
     let db_count = count + 1;
 
     let db_rows = sqlx::query!(
-        "SELECT amps, volts, watts, created_at, energy_log.token as token, u.location as location 
+        "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
         FROM energy_log
         INNER JOIN tokens t
         ON t.token = energy_log.token
@@ -143,10 +147,12 @@ async fn get_paginated_rows_for_token(
     };
 
     for row in db_rows_split {
+        let ua = row.user_agent.as_ref().map(|s| s.as_str()).unwrap_or("Unknown");
         rows.push(RowInfo::new(
             &row.location,
             &row.token,
             &row.created_at.to_string(),
+            ua,
             row.amps.parse::<f64>().unwrap_or(0f64),
             row.volts.parse::<f64>().unwrap_or(0f64),
             row.watts.parse::<f64>().unwrap_or(0f64),
@@ -246,7 +252,7 @@ async fn list_table_html(
     let mut result = String::new();
     result.push_str("<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>Consumption info</title></head><body><table>");
     result.push_str(
-        "<tr><th>Location (token id)</th><th>Amps</th><th>Volts</th><th>Watts</th></tr>\n",
+        "<tr><th>Location (token id/ua)</th><th>Date</th><th>Amps</th><th>Volts</th><th>Watts</th></tr>\n",
     );
     for row in rows {
         result.push_str(&row.to_html());
