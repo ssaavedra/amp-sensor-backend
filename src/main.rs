@@ -124,6 +124,7 @@ async fn get_paginated_rows_for_token(
         INNER JOIN users u
         ON u.id = t.user_id
         WHERE energy_log.token = ?
+        ORDER BY created_at DESC
         LIMIT ?
         OFFSET ?",
         token.0,
