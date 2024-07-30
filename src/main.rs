@@ -1,9 +1,17 @@
 use governor::Quota;
+use print_table::get_paginated_rows_for_token;
 use rocket::http::ContentType;
 use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
 use rocket_db_pools::{sqlx, Connection, Database};
 use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor};
+use token::{ValidDbToken, simplify_token};
+
+mod print_table;
+mod token;
+mod tessie;
+
+
 
 #[derive(Database)]
 #[database("sqlite_logs")]
@@ -21,155 +29,10 @@ impl<'r> RocketGovernable<'r> for RateLimitGuard {
 #[serde(crate = "rocket::serde")]
 struct LogData {
     amps: f64,
-    volts: f64,
+    volts: Option<f64>,
     watts: f64,
 }
 
-struct ValidDbToken(String);
-
-#[rocket::async_trait]
-impl<'r> rocket::request::FromRequest<'r> for ValidDbToken {
-    type Error = ();
-
-    async fn from_request(
-        request: &'r rocket::Request<'_>,
-    ) -> rocket::request::Outcome<Self, Self::Error> {
-        let mut db = request.guard::<Connection<Logs>>().await.unwrap();
-
-        let token = request.routed_segment(1).map(|s| s.to_string());
-
-        log::info!("Got token: {:?}", token);
-
-        match token {
-            Some(token) => {
-                // Now validate against the db!
-                let rows = sqlx::query!(
-                    "SELECT COUNT(*) as count FROM tokens WHERE token = ?",
-                    token
-                );
-                let count = rows.fetch_one(&mut **db).await.unwrap().count;
-                log::info!("Token count in DB: {}", count);
-                if count == 0 {
-                    return rocket::request::Outcome::Error((rocket::http::Status::NotFound, ()));
-                }
-                rocket::request::Outcome::Success(ValidDbToken(token))
-            }
-            _ => {
-                log::info!("No token found");
-                rocket::request::Outcome::Forward(rocket::http::Status::NotFound)
-            }
-        }
-    }
-}
-
-struct RowInfo {
-    location: String,
-    token: String,
-    datetime: String,
-    ua: String,
-    amps: f64,
-    volts: f64,
-    watts: f64,
-}
-
-impl RowInfo {
-    fn new(
-        location: &str,
-        token: &str,
-        datetime: &str,
-        ua: &str,
-        amps: f64,
-        volts: f64,
-        watts: f64,
-    ) -> Self {
-        Self {
-            location: location.to_string(),
-            token: token.to_string(),
-            datetime: datetime.to_string(),
-            ua: ua.to_string(),
-            amps,
-            volts,
-            watts,
-        }
-    }
-
-    fn to_html(&self) -> String {
-        format!(
-            "<tr><td>{} ({}/{})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
-            self.location,
-            simplify_token(&self.token),
-            self.ua,
-            self.datetime,
-            self.amps,
-            self.volts,
-            self.watts
-        )
-    }
-
-    fn to_json(&self) -> String {
-        format!("{{\"location\": \"{}\", \"token\": \"{}\", \"datetime\": \"{}\", \"amps\": {}, \"volts\": {}, \"watts\": {}}}", self.location, self.token, self.datetime, self.amps, self.volts, self.watts)
-    }
-}
-
-async fn get_paginated_rows_for_token(
-    db: &mut Connection<Logs>,
-    token: &ValidDbToken,
-    page: i32,
-    count: i32,
-) -> (Vec<RowInfo>, bool) {
-    let mut rows = Vec::new();
-    let offset = page * count;
-    let db_count = count + 1;
-
-    let db_rows = sqlx::query!(
-        "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
-        FROM energy_log
-        INNER JOIN tokens t
-        ON t.token = energy_log.token
-        INNER JOIN users u
-        ON u.id = t.user_id
-        WHERE energy_log.token = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-        OFFSET ?",
-        token.0,
-        db_count,
-        offset
-    )
-    .fetch_all(&mut ***db)
-    .await
-    .unwrap();
-
-    let db_rows_split = if db_rows.len() > count as usize {
-        &db_rows[..count as usize]
-    } else {
-        &db_rows
-    };
-
-    for row in db_rows_split {
-        let ua = row.user_agent.as_ref().map(|s| s.as_str()).unwrap_or("Unknown");
-        rows.push(RowInfo::new(
-            &row.location,
-            &row.token,
-            &row.created_at.to_string(),
-            ua,
-            row.amps.parse::<f64>().unwrap_or(0f64),
-            row.volts.parse::<f64>().unwrap_or(0f64),
-            row.watts.parse::<f64>().unwrap_or(0f64),
-        ));
-    }
-    let has_next = db_rows.len() > count as usize;
-
-    (rows, has_next)
-}
-
-fn simplify_token(token: &str) -> String {
-    let mut result = String::new();
-    result.push_str(&token[..4]);
-    result.push_str("...");
-    result.push_str(&token[token.len() - 4..]);
-    result
-}
 
 #[derive(Debug)]
 struct UserAgent<'a>(&'a str);
@@ -213,15 +76,17 @@ async fn post_token(
     mut db: Connection<Logs>,
     log: Json<LogData>,
     token: ValidDbToken,
+    tessie_api: &rocket::State<tessie::TessieApiHandler>,
     ip: ClientIP,
     ua: UserAgent<'_>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> String {
+    let volts = log.volts.unwrap_or(230.0f64);
     let _rows = sqlx::query!(
         "INSERT INTO energy_log (token, amps, volts, watts, user_agent, client_ip) VALUES (?, ?, ?, ?, ?, ?)",
         token.0,
         log.amps,
-        log.volts,
+        volts,
         log.watts,
         ua.0,
         ip.0
@@ -232,6 +97,7 @@ async fn post_token(
     .rows_affected();
 
     log::info!("Inserted row from IP {:?} and UA {:?}", ip, ua);
+    tessie_api.inform_amps_at_location(log.amps).await;
 
     format!("OK")
 }
@@ -304,7 +170,7 @@ async fn list_table_json(
 }
 
 #[get("/")]
-async fn index(_ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
+async fn index(__ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
     log::info!("Got to index!");
     "PONG".to_string()
 }
@@ -318,6 +184,7 @@ async fn rocket() -> _ {
             sqlx::migrate!("./migrations").run(&**db).await.unwrap();
             rocket
         }))
+        .manage(tessie::TessieApiHandler::new())
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],
