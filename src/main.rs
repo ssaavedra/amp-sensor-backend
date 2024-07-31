@@ -5,7 +5,7 @@ use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
 use rocket_db_pools::{sqlx, Connection, Database};
 use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor};
-use token::{ValidDbToken, simplify_token};
+use token::ValidDbToken;
 
 mod print_table;
 mod token;
@@ -21,7 +21,7 @@ pub struct RateLimitGuard;
 
 impl<'r> RocketGovernable<'r> for RateLimitGuard {
     fn quota(_method: rocket_governor::Method, _route_name: &str) -> governor::Quota {
-        Quota::per_second(Self::nonzero(2u32))
+        Quota::per_second(Self::nonzero(4u32)).allow_burst(Self::nonzero(15u32))
     }
 }
 
@@ -73,15 +73,14 @@ impl<'r> rocket::request::FromRequest<'r> for ClientIP {
 // Route with POST /log/:token/ will INSERT into the database
 #[post("/log/<_>", data = "<log>", rank = 2)]
 async fn post_token(
-    mut db: Connection<Logs>,
+    token: &ValidDbToken,
     log: Json<LogData>,
-    token: ValidDbToken,
-    tessie_api: &rocket::State<tessie::TessieApiHandler>,
     ip: ClientIP,
     ua: UserAgent<'_>,
+    mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> String {
-    let volts = log.volts.unwrap_or(230.0f64);
+    let volts = log.volts.unwrap_or(220.0f64);
     let _rows = sqlx::query!(
         "INSERT INTO energy_log (token, amps, volts, watts, user_agent, client_ip) VALUES (?, ?, ?, ?, ?, ?)",
         token.0,
@@ -97,17 +96,16 @@ async fn post_token(
     .rows_affected();
 
     log::info!("Inserted row from IP {:?} and UA {:?}", ip, ua);
-    tessie_api.inform_amps_at_location(log.amps).await;
 
     format!("OK")
 }
 
 #[get("/log/<_>/html?<page>&<count>", rank = 1)]
 async fn list_table_html(
-    mut db: Connection<Logs>,
     page: Option<i32>,
     count: Option<i32>,
-    token: ValidDbToken,
+    token: &ValidDbToken,
+    mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
     let page = page.unwrap_or(0);
@@ -139,10 +137,10 @@ async fn list_table_html(
 
 #[get("/log/<_>/json?<page>&<count>", rank = 1)]
 async fn list_table_json(
-    mut db: Connection<Logs>,
     page: Option<i32>,
     count: Option<i32>,
-    token: ValidDbToken,
+    token: &ValidDbToken,
+    mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> rocket::response::content::RawJson<String> {
     let page = page.unwrap_or(0);
@@ -184,7 +182,6 @@ async fn rocket() -> _ {
             sqlx::migrate!("./migrations").run(&**db).await.unwrap();
             rocket
         }))
-        .manage(tessie::TessieApiHandler::new())
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],

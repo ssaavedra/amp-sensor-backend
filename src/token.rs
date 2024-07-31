@@ -1,7 +1,14 @@
 use rocket_db_pools::Connection;
 
 
-pub struct ValidDbToken(pub String);
+// The second argument is a private unit struct, which is used to ensure that
+// the token can only be created by the `FromRequest` implementation.
+pub struct ValidDbToken(pub String, ());
+
+enum RequestTokenDbResult {
+    Ok(ValidDbToken),
+    NotFound,
+}
 
 pub fn simplify_token(token: &str) -> String {
     let mut result = String::new();
@@ -12,36 +19,38 @@ pub fn simplify_token(token: &str) -> String {
 }
 
 #[rocket::async_trait]
-impl<'r> rocket::request::FromRequest<'r> for ValidDbToken {
+impl<'r> rocket::request::FromRequest<'r> for &'r ValidDbToken {
     type Error = ();
 
     async fn from_request(
         request: &'r rocket::Request<'_>,
     ) -> rocket::request::Outcome<Self, Self::Error> {
-        let mut db = request.guard::<Connection<crate::Logs>>().await.unwrap();
-
-        let token = request.routed_segment(1).map(|s| s.to_string());
-
-        log::info!("Got token: {:?}", token);
-
-        match token {
-            Some(token) => {
-                // Now validate against the db!
-                let rows = sqlx::query!(
-                    "SELECT COUNT(*) as count FROM tokens WHERE token = ?",
-                    token
-                );
-                let count = rows.fetch_one(&mut **db).await.unwrap().count;
-                log::info!("Token count in DB: {}", count);
-                if count == 0 {
-                    return rocket::request::Outcome::Error((rocket::http::Status::NotFound, ()));
+        let result = request.local_cache_async(async {
+            let mut db = request.guard::<Connection<crate::Logs>>().await.expect("Failed to get db connection");
+            let token = request.routed_segment(1).map(|s| s.to_string());
+            match token {
+                Some(token) => {
+                    let rows = sqlx::query!(
+                        "SELECT COUNT(*) as count FROM tokens WHERE token = ?",
+                        token
+                    );
+                    let count = rows.fetch_one(&mut **db).await.unwrap().count;
+                    log::info!("Token count in DB: {}", count);
+                    if count == 0 {
+                        return RequestTokenDbResult::NotFound;
+                    }
+                    RequestTokenDbResult::Ok(ValidDbToken(token, ()))
                 }
-                rocket::request::Outcome::Success(ValidDbToken(token))
+                _ => {
+                    log::info!("No token found");
+                    RequestTokenDbResult::NotFound
+                }
             }
-            _ => {
-                log::info!("No token found");
-                rocket::request::Outcome::Forward(rocket::http::Status::NotFound)
-            }
+        }).await;
+
+        match result {
+            RequestTokenDbResult::Ok(token) => rocket::request::Outcome::Success(token),
+            RequestTokenDbResult::NotFound => rocket::request::Outcome::Forward(rocket::http::Status::NotFound),
         }
     }
 }
