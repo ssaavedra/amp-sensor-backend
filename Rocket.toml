@@ -4,6 +4,11 @@ port = 7609
 
 [default]
 ip_header = "Cf-Connecting-IP"
+car_vin = "XX"
+tessie_token = "XX"
+charger_location = "0.0,0.0"
+max_amps = 10.2
+max_amps_car = 9
 
 [default.databases.sqlite_logs]
 url = "./sqlite.db"

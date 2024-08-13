@@ -8,9 +8,9 @@ use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor}
 use token::ValidDbToken;
 
 mod alive_check;
+mod car;
 mod print_table;
 mod token;
-mod tessie;
 
 
 
@@ -178,12 +178,13 @@ async fn index(__ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
 async fn rocket() -> _ {
     rocket::build()
         .attach(Logs::init())
-        .attach(fairing::AdHoc::on_ignite("Setup DB", |rocket| async {
+        .attach(fairing::AdHoc::on_ignite("Run DB migrations", |rocket| async {
             let db = Logs::fetch(&rocket).expect("DB connection");
             sqlx::migrate!("./migrations").run(&**db).await.unwrap();
             rocket
         }))
         .attach(alive_check::AliveCheckFairing::new(""))
+        .attach(car::tessie_fairing::TessieFairing::new())
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],
