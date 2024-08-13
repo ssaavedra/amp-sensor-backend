@@ -7,6 +7,7 @@ use rocket_db_pools::{sqlx, Connection, Database};
 use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor};
 use token::ValidDbToken;
 
+mod alive_check;
 mod print_table;
 mod token;
 mod tessie;
@@ -182,6 +183,7 @@ async fn rocket() -> _ {
             sqlx::migrate!("./migrations").run(&**db).await.unwrap();
             rocket
         }))
+        .attach(alive_check::AliveCheckFairing::new(""))
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],
