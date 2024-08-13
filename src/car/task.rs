@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::tessie_api::{ChargingState, TessieAPIHandler, TessieCarState};
 
 #[derive(Debug)]
-pub(super) struct MainTaskParams {
+pub(super) struct TessieHandlerParams {
     pub vin: String,
     pub token: String,
     pub charger_location: LatLon,
@@ -15,7 +15,7 @@ pub(super) struct MainTaskParams {
     pub max_amps_car: usize,
 }
 
-impl MainTaskParams {
+impl TessieHandlerParams {
     pub fn from_figment(figment: &rocket::figment::Figment) -> Self {
         let vin = figment
             .extract_inner("car_vin")
@@ -48,7 +48,7 @@ impl MainTaskParams {
 // 1. Check if the car is nearby. This task will return when it needs to be rescheduled depending on the distance.
 // 2. Check if the car is charging. This task will be scheduled every minute while the car is nearby.
 // 3. If the car is charging, check the amps drawn by the home from the database and update the car API accordingly to not exceed the amp limit.
-pub(super) async fn main_task(params: MainTaskParams) {
+pub(super) async fn main_task(params: TessieHandlerParams) {
     log::info!("Tessie: Starting main task");
     // Initialize the car handler
     let handler = TessieCarHandler::new(
@@ -98,7 +98,8 @@ pub(super) async fn main_task(params: MainTaskParams) {
         // If the amps are lower than the limit, increase the amps requested by the car
         // Sleep for 60 seconds
         loop {
-            if handler.get_charging_status().await {
+            let charging_state = handler.get_charging_status().await;
+            if charging_state == ChargingState::Charging || charging_state == ChargingState::Starting || charging_state == ChargingState::Pending {
                 let car_amps = handler.get_amps().await as usize;
 
                 // Get sliding average of the measurements of the last 15 seconds
@@ -150,13 +151,23 @@ impl TryFrom<String> for LatLon {
     }
 }
 
-struct TessieCarHandler {
+pub struct HomeState {
+    pub amps: f64,
+    pub timestamp: i64,
+}
+
+pub struct HomeStateWrapper {
+    state: Vec<HomeState>,
+}
+
+pub struct TessieCarHandler {
     // API to control the car
     api: TessieAPIHandler,
     charger_location: LatLon,
     max_amps: f64,
     max_amps_car: usize,
     last_state: Arc<Mutex<Option<TessieCarStateWrapper>>>,
+    home_state: Arc<Mutex<HomeStateWrapper>>,
 }
 
 // Impl LatLon distance calculation using Haversine formula
@@ -179,7 +190,18 @@ impl LatLon {
 }
 
 impl TessieCarHandler {
-    fn new(
+    pub fn from_figment(figment: &rocket::figment::Figment) -> Self {
+        let params = TessieHandlerParams::from_figment(figment);
+        Self::new(
+            params.vin,
+            params.token,
+            params.charger_location,
+            params.max_amps,
+            params.max_amps_car,
+        )
+    }
+
+    pub fn new(
         vin: String,
         token: String,
         charger_location: LatLon,
@@ -193,6 +215,9 @@ impl TessieCarHandler {
             max_amps,
             max_amps_car,
             last_state: Arc::new(Mutex::new(None)),
+            home_state: Arc::new(Mutex::new(HomeStateWrapper {
+                state: Vec::new(),
+            })),
         }
     }
 
@@ -216,7 +241,7 @@ impl TessieCarHandler {
         Ok(state)
     }
 
-    async fn get_state(&self) -> anyhow::Result<TessieCarState> {
+    pub async fn get_state(&self) -> anyhow::Result<TessieCarState> {
         // Check if the state is already cached
         // if so, return the cached state unless force=true or the state is older than 30 secs
         if let Some(state) = self.last_state.lock().await.as_ref() {
@@ -228,32 +253,46 @@ impl TessieCarHandler {
         self.force_update_state_cache().await
     }
 
-    async fn get_car_distance_to_charger(&self) -> anyhow::Result<f64> {
+    pub async fn get_car_distance_to_charger(&self) -> anyhow::Result<f64> {
         let state = self.get_state().await?;
         let car_location = LatLon::from(state.drive_state);
         Ok(car_location.distance(&self.charger_location))
     }
-    async fn is_car_nearby(&self) -> anyhow::Result<bool> {
+    pub async fn is_car_nearby(&self) -> anyhow::Result<bool> {
         let distance = self.get_car_distance_to_charger().await?;
         Ok(distance < 0.1)
     }
 
-    async fn get_charging_status(&self) -> bool {
+    pub async fn get_charging_status(&self) -> ChargingState {
         self.get_state()
             .await
-            .map(|state| state.charge_state.charging_state == ChargingState::Charging)
-            .unwrap_or(false)
+            .map(|state| state.charge_state.charging_state)
+            .unwrap_or(ChargingState::Starting)
     }
 
-    async fn get_amps(&self) -> f64 {
+    pub async fn get_amps(&self) -> f64 {
         self.get_state()
             .await
             .map(|s| s.charge_state.charger_actual_current)
             .unwrap_or(0.0)
     }
 
-    async fn set_amps(&self, amps: usize) -> Result<(), reqwest::Error> {
+    pub async fn set_amps(&self, amps: usize) -> Result<(), reqwest::Error> {
         self.api.set_charging_amps(amps).await?;
+        Ok(())
+    }
+
+    pub async fn set_current_home_consumption(&self, amps: f64) -> Result<(), reqwest::Error> {
+        let mut guard = self.home_state.lock().await;
+        guard.state.push(HomeState {
+            amps,
+            timestamp: chrono::Utc::now().timestamp(),
+        });
+        Ok(())
+    }
+
+    pub async fn throttled_calculate_amps(&self) -> anyhow::Result<()> {
+        // TODO: Implement throttled_calculate_amps
         Ok(())
     }
 }
