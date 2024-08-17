@@ -27,28 +27,33 @@ impl TessieFairing {
 
         // Check if the car is nearby
         if handler.is_car_nearby().await? {
+            log::info!("Car is nearby: TRUE");
             // Check if the car is charging
             let charge_state = handler.get_charging_status().await;
+            log::info!("Car charging state is: {:?}", charge_state);
             if charge_state == super::tessie_api::ChargingState::Charging {
-                let avg_amps = self.get_avg_amps_at_location(req).await?;
-                handler.set_current_home_consumption(avg_amps).await?;
+                let (avg_amps, max_amps) = self.get_avg_amps_at_location(req).await?;
+                handler.set_current_home_consumption(avg_amps, max_amps).await?;
+                log::info!("Retrieved current home consumption as: {} amps (max={})", avg_amps, max_amps);
                 handler.throttled_calculate_amps().await?;
             }
+        } else {
+            log::info!("Car is nearby: FALSE");
         }
         
         Ok(())
     }
 
-    async fn get_avg_amps_at_location<'r>(&self, req: &rocket::Request<'r>) -> anyhow::Result<f64> {
+    async fn get_avg_amps_at_location<'r>(&self, req: &rocket::Request<'r>) -> anyhow::Result<(f64, f64)> {
         let db = req.guard::<&crate::Logs>().await.unwrap();
         let token = req.guard::<&crate::ValidDbToken>().await.unwrap();
         
-        let query = format!("SELECT AVG(amps) FROM energy_log WHERE token = '?' AND created_at > datetime('now', '-30 seconds')");
-        let (avg_amps,): (f64,) = sqlx::query_as(&query)
+        let query = format!("SELECT AVG(amps), MAX(amps) FROM energy_log WHERE token = '?' AND created_at > datetime('now', '-30 seconds')");
+        let (avg_amps, max_amps): (f64, f64) = sqlx::query_as(&query)
             .bind(&token.0)
             .fetch_one(&**db)
             .await?;
-        Ok(avg_amps)
+        Ok((avg_amps, max_amps))
     }
 }
 

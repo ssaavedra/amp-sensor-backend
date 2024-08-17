@@ -184,7 +184,7 @@ async fn rocket() -> _ {
             rocket
         }))
         .attach(alive_check::AliveCheckFairing::new(""))
-        .attach(car::tessie_fairing::TessieFairing::new())
+        // .attach(car::tessie_fairing::TessieFairing::new())
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],

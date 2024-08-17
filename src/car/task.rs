@@ -44,89 +44,12 @@ impl TessieHandlerParams {
     }
 }
 
-// Controls two different tasks:
-// 1. Check if the car is nearby. This task will return when it needs to be rescheduled depending on the distance.
-// 2. Check if the car is charging. This task will be scheduled every minute while the car is nearby.
-// 3. If the car is charging, check the amps drawn by the home from the database and update the car API accordingly to not exceed the amp limit.
-pub(super) async fn main_task(params: TessieHandlerParams) {
-    log::info!("Tessie: Starting main task");
-    // Initialize the car handler
-    let handler = TessieCarHandler::new(
-        params.vin.clone(),
-        params.token.clone(),
-        params.charger_location.clone(),
-        params.max_amps,
-        params.max_amps_car,
-    );
-
-    loop {
-        loop {
-            // Check if the car is nearby
-            // If the car is nearby, break the loop
-            // If the car is not nearby, sleep for 60 seconds
-            if handler.is_car_nearby().await.unwrap_or(false) {
-                break;
-            } else {
-                // Check distance
-                let distance_km = handler.get_car_distance_to_charger().await.expect("Distance to charger");
-                let max_speed = 150.0; // something above the plausible mean speed in km/h
-                let time_seconds = (distance_km / max_speed * 3600.0) as i64;
-                let last_update = handler
-                    .last_state
-                    .lock()
-                    .await
-                    .as_ref()
-                    .map(|x| x.last_update)
-                    .unwrap_or(0);
-                let min_time_to_sleep = max(0, last_update + 30 - chrono::Utc::now().timestamp());
-                let time_to_sleep = max(time_seconds, min_time_to_sleep);
-                log::info!(
-                    "Car is {} km away. Sleeping for {} seconds",
-                    distance_km,
-                    time_to_sleep
-                );
-                rocket::tokio::time::sleep(std::time::Duration::from_secs(time_to_sleep as u64))
-                    .await;
-            }
-        }
-        log::info!("Tessie: Car is nearby");
-
-        // The car is nearby
-        // Check if the car is charging
-        // If the car is charging, check the amps drawn by the home from the database
-        // If the amps are higher than the limit, reduce the amps requested by the car
-        // If the amps are lower than the limit, increase the amps requested by the car
-        // Sleep for 60 seconds
-        loop {
-            let charging_state = handler.get_charging_status().await;
-            if charging_state == ChargingState::Charging || charging_state == ChargingState::Starting || charging_state == ChargingState::Pending {
-                let car_amps = handler.get_amps().await as usize;
-
-                // Get sliding average of the measurements of the last 15 seconds
-                let house_amps = 10.0; // TODO: Fetch house amps from the database
-                if car_amps > handler.max_amps_car {
-                    handler.set_amps(handler.max_amps_car).await.unwrap();
-                } else if house_amps < handler.max_amps {
-                    let house_amps_without_car = house_amps - (car_amps as f64);
-                    let amps_to_request = max(
-                        0,
-                        ((handler.max_amps - house_amps_without_car) * 0.9) as usize,
-                    );
-                    handler.set_amps(amps_to_request).await.unwrap();
-                }
-            } else {
-                log::info!("Tessie: Car is not charging");
-            }
-            rocket::tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 struct TessieCarStateWrapper {
     state: TessieCarState,
     last_update: i64,
-    last_amps_requested: f64,
+    last_amps_requested: usize,
     last_amps_requested_time: i64,
 }
 
@@ -151,8 +74,18 @@ impl TryFrom<String> for LatLon {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HomeState {
-    pub amps: f64,
+    /// Average amps drawn by the home (including the car) over the last 30 seconds
+    pub avg_amps: f64,
+
+    /// Maximum amps drawn by the home (including the car) over the last 30 seconds
+    pub max_amps: f64,
+
+    /// Amps drawn by the car over the last 30 seconds
+    pub car_amps: f64,
+
+    /// Timestamp of the measurement
     pub timestamp: i64,
 }
 
@@ -228,7 +161,7 @@ impl TessieCarHandler {
             .await
             .as_ref()
             .map(|x| (x.last_amps_requested, x.last_amps_requested_time))
-            .unwrap_or((0.0, 0));
+            .unwrap_or((0, 0));
         let state = self.api.get_state().await?;
         log::info!("Tessie: Updated state cache {:?}", state);
         let mut guard = self.last_state.lock().await;
@@ -278,21 +211,79 @@ impl TessieCarHandler {
     }
 
     pub async fn set_amps(&self, amps: usize) -> Result<(), reqwest::Error> {
-        self.api.set_charging_amps(amps).await?;
+        let result = self.api.set_charging_amps(amps).await?;
+        log::info!("Set amps to {} result: {:?}", amps, result);
         Ok(())
     }
 
-    pub async fn set_current_home_consumption(&self, amps: f64) -> Result<(), reqwest::Error> {
+    pub async fn set_current_home_consumption(&self, avg_amps: f64, max_amps: f64) -> Result<(), reqwest::Error> {
         let mut guard = self.home_state.lock().await;
+        let car_amps = self.get_amps().await;
         guard.state.push(HomeState {
-            amps,
+            car_amps,
+            avg_amps,
+            max_amps,
             timestamp: chrono::Utc::now().timestamp(),
         });
+        // Ensure we only keep 10 entries
+        while guard.state.len() > 10 {
+            guard.state.remove(0);
+        }
         Ok(())
     }
 
     pub async fn throttled_calculate_amps(&self) -> anyhow::Result<()> {
-        // TODO: Implement throttled_calculate_amps
+        // Only change amps if they are *less* or at least 30 seconds have passed since the last change
+        let (last_amps_requested, last_amps_requested_time) = self
+            .last_state
+            .lock()
+            .await
+            .as_ref()
+            .map(|x| (x.last_amps_requested, x.last_amps_requested_time))
+            .unwrap_or((0, 0));
+
+        // Calculate the average amps over the last 30 seconds
+        let now = chrono::Utc::now().timestamp();
+
+        // If last_amps_requested_time - now < 30 seconds, we skip this iteration
+        if last_amps_requested_time > now - 30 {
+            log::info!("Skipping throttled_calculate_amps since only {} seconds have passed", now - last_amps_requested_time);
+            return Ok(());
+        }
+        
+        let home_amps_without_car = {
+            let guard = self.home_state.lock().await;
+            let state = guard.state.last().unwrap();
+            log::info!("Home states: {:?}", guard.state);
+            log::info!("Home amps without car: {} (avg home={}, car={})", state.avg_amps - state.car_amps, state.avg_amps, state.car_amps);
+
+            if state.avg_amps - state.car_amps < 0.0 {
+                0.0
+            } else {
+                state.avg_amps - state.car_amps
+            }
+        };
+
+
+        let amps_to_request = max(
+            0,
+            ((self.max_amps - home_amps_without_car) * 0.9) as usize,
+        );
+
+        if last_amps_requested < amps_to_request
+            || last_amps_requested_time < now - 30
+        {
+            let mut guard = self.last_state.lock().await;
+            guard.as_mut().map(|x| {
+                x.last_amps_requested = amps_to_request;
+                x.last_amps_requested_time = now;
+            });
+            log::info!("Setting amps to {}", amps_to_request);
+            self.set_amps(amps_to_request).await?;
+        } else {
+            log::info!("Skipping setting amps to {}. We requested it {} seconds ago.", amps_to_request, now - last_amps_requested_time);
+        }
+
         Ok(())
     }
 }
