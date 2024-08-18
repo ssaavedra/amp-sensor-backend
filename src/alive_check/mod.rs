@@ -1,3 +1,12 @@
+//! A simple alive check fairing.
+//! 
+//! This module contains the [AliveCheckFairing] fairing, that checks if any
+//! sensor has logged data in the last 60 seconds. If there hasn't been any
+//! input, it sends a message via webhook. The webhook URL is read from the
+//! figment configuration (Rocket.toml).
+//! 
+//! This is useful to get notified in case of a network or DNS routing issue.
+
 use rocket::{
     fairing::{Fairing, Info, Kind},
     figment::providers::Serialized,

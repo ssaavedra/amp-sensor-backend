@@ -44,7 +44,7 @@ use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
 use rocket_db_pools::{sqlx, Connection, Database};
 use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor};
-use token::ValidDbToken;
+use token::{Token, ValidDbToken};
 
 mod alive_check;
 mod car;
@@ -129,7 +129,7 @@ async fn post_token(
     let volts = log.volts.unwrap_or(220.0f64);
     let _rows = sqlx::query!(
         "INSERT INTO energy_log (token, amps, volts, watts, user_agent, client_ip) VALUES (?, ?, ?, ?, ?, ?)",
-        token.0,
+        token,
         log.amps,
         volts,
         log.watts,
@@ -172,7 +172,7 @@ async fn list_table_html(
     if has_next {
         result.push_str(&format!(
             "<a href=\"/log/{}/html?page={}&count={}\">Next</a>",
-            token.0,
+            token.full_token(),
             page + 1,
             count
         ));
@@ -197,28 +197,23 @@ async fn list_table_json(
     let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count).await;
 
     let next_url = if has_next {
-        format!("/log/{}/json?page={}&count={}", token.0, page + 1, count)
+        format!("/log/{}/json?page={}&count={}", token.full_token(), page + 1, count)
     } else {
         "".to_string()
     };
 
-    let mut result = String::new();
-    result.push_str("{\n\"rows\": [\n");
-    for (i, row) in rows.iter().enumerate() {
-        result.push_str(&row.to_json());
-        if i < rows.len() - 1 {
-            result.push_str(",\n");
-        }
-    }
-    result.push_str(&format!("\n],\n\"next\": \"{}\"}}\n", next_url));
+    let result = serde_json::json!({
+        "rows": rows,
+        "next": next_url
+    });
 
-    rocket::response::content::RawJson(result)
+    rocket::response::content::RawJson(serde_json::to_string_pretty(&result).unwrap())
 }
 
 /// Route GET / will return a simple PONG message. By default we don't advertise
 /// the functionality of the application to the world.
 #[get("/")]
-async fn index(__ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
+async fn index(_ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
     log::info!("Got to index!");
     "PONG".to_string()
 }

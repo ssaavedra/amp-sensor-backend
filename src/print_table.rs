@@ -1,12 +1,22 @@
-use rocket_db_pools::Connection;
+//! A simple module to help print the energy log table in HTML and JSON format.
+//! 
+//! This module contains the [RowInfo] struct that represents a row in the energy
+//! log table. It also contains the [get_paginated_rows_for_token] function that
+//! retrieves the rows from the database for a given token and page.
+//! 
+//! The rows are returned as a vector of [RowInfo] structs, and a boolean that
+//! indicates if there are more rows to be fetched.
 
-use crate::token::{simplify_token, ValidDbToken};
+use rocket_db_pools::Connection;
+use serde::Serialize;
+
+use crate::token::{DbToken, Token, ValidDbToken};
 
 
 
 pub struct RowInfo {
     location: String,
-    token: String,
+    token: DbToken,
     datetime: String,
     ua: String,
     amps: f64,
@@ -14,10 +24,19 @@ pub struct RowInfo {
     watts: f64,
 }
 
+impl Serialize for RowInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_json().serialize(serializer)
+    }
+}
+
 impl RowInfo {
     fn new(
         location: &str,
-        token: &str,
+        token: DbToken,
         datetime: &str,
         ua: &str,
         amps: f64,
@@ -26,7 +45,7 @@ impl RowInfo {
     ) -> Self {
         Self {
             location: location.to_string(),
-            token: token.to_string(),
+            token,
             datetime: datetime.to_string(),
             ua: ua.to_string(),
             amps,
@@ -39,7 +58,7 @@ impl RowInfo {
         format!(
             "<tr><td>{} ({}/{})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
             self.location,
-            simplify_token(&self.token),
+            self.token.simplified(),
             self.ua,
             self.datetime,
             self.amps,
@@ -48,8 +67,15 @@ impl RowInfo {
         )
     }
 
-    pub fn to_json(&self) -> String {
-        format!("{{\"location\": \"{}\", \"token\": \"{}\", \"datetime\": \"{}\", \"amps\": {}, \"volts\": {}, \"watts\": {}}}", self.location, self.token, self.datetime, self.amps, self.volts, self.watts)
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "location": self.location,
+            "token": self.token.full_token(),
+            "datetime": self.datetime,
+            "amps": self.amps,
+            "volts": self.volts,
+            "watts": self.watts
+        })
     }
 }
 
@@ -61,7 +87,7 @@ pub async fn get_paginated_rows_for_token(
 ) -> (Vec<RowInfo>, bool) {
     let mut rows = Vec::new();
     let offset = page * count;
-    let db_count = count + 1;
+    let db_count = count + 1; // Fetch one more row to check if there are still more rows
 
     let db_rows = sqlx::query!(
         "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
@@ -74,7 +100,7 @@ pub async fn get_paginated_rows_for_token(
         ORDER BY created_at DESC
         LIMIT ?
         OFFSET ?",
-        token.0,
+        token,
         db_count,
         offset
     )
@@ -82,6 +108,7 @@ pub async fn get_paginated_rows_for_token(
     .await
     .unwrap();
 
+    // Return only the rows that the user requested
     let db_rows_split = if db_rows.len() > count as usize {
         &db_rows[..count as usize]
     } else {
@@ -92,7 +119,7 @@ pub async fn get_paginated_rows_for_token(
         let ua = row.user_agent.as_ref().map(|s| s.as_str()).unwrap_or("Unknown");
         rows.push(RowInfo::new(
             &row.location,
-            &row.token,
+            DbToken(row.token.to_string()),
             &row.created_at.to_string(),
             ua,
             row.amps,
