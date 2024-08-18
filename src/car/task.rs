@@ -1,5 +1,5 @@
 use core::panic;
-use std::{cmp::max, sync::Arc};
+use std::{cmp::{max, min}, sync::Arc};
 
 use rocket::tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,6 @@ impl TessieHandlerParams {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 struct TessieCarStateWrapper {
@@ -148,9 +147,7 @@ impl TessieCarHandler {
             max_amps,
             max_amps_car,
             last_state: Arc::new(Mutex::new(None)),
-            home_state: Arc::new(Mutex::new(HomeStateWrapper {
-                state: Vec::new(),
-            })),
+            home_state: Arc::new(Mutex::new(HomeStateWrapper { state: Vec::new() })),
         }
     }
 
@@ -170,7 +167,10 @@ impl TessieCarHandler {
         if last_amps_requested != state.charge_state.charge_current_request {
             last_amps_requested = state.charge_state.charge_current_request;
             last_amps_requested_time = chrono::Utc::now().timestamp() - 30; // Allow immediate update if required
-            log::info!("Tessie: External Amps change: last requested {}A", last_amps_requested);
+            log::info!(
+                "Tessie: External Amps change: last requested {}A",
+                last_amps_requested
+            );
         }
 
         guard.replace(TessieCarStateWrapper {
@@ -186,7 +186,6 @@ impl TessieCarHandler {
         if let Some(state) = self.last_state.lock().await.as_mut() {
             state.last_update = 0;
         }
-        
     }
 
     pub async fn get_state(&self) -> anyhow::Result<TessieCarState> {
@@ -194,7 +193,7 @@ impl TessieCarHandler {
         // if so, return the cached state unless force=true or the state is older than 30 secs
         if let Some(state) = self.last_state.lock().await.as_ref() {
             if state.last_update > (chrono::Utc::now().timestamp() - 30) {
-                return Ok(state.state.clone())
+                return Ok(state.state.clone());
             }
         }
         // Fetch the state from the car API
@@ -212,7 +211,8 @@ impl TessieCarHandler {
     }
 
     pub async fn get_charging_status(&self) -> ChargingState {
-        let charging_state = self.get_state()
+        let charging_state = self
+            .get_state()
             .await
             .map(|state| state.charge_state.charging_state)
             .unwrap_or(ChargingState::Starting);
@@ -237,7 +237,11 @@ impl TessieCarHandler {
         Ok(())
     }
 
-    pub async fn set_current_home_consumption(&self, avg_amps: f64, max_amps: f64) -> Result<(), reqwest::Error> {
+    pub async fn set_current_home_consumption(
+        &self,
+        avg_amps: f64,
+        max_amps: f64,
+    ) -> Result<(), reqwest::Error> {
         let mut guard = self.home_state.lock().await;
         let car_amps = self.get_amps().await;
         guard.state.push(HomeState {
@@ -270,7 +274,12 @@ impl TessieCarHandler {
             let guard = self.home_state.lock().await;
             let state = guard.state.last().unwrap();
             log::info!("Home states: {:?}", guard.state);
-            log::info!("Home amps without car: {} (avg home={}, car={})", state.avg_amps - state.car_amps, state.avg_amps, state.car_amps);
+            log::info!(
+                "Home amps without car: {} (avg home={}, car={})",
+                state.avg_amps - state.car_amps,
+                state.avg_amps,
+                state.car_amps
+            );
 
             if state.avg_amps - state.car_amps < 0.0 {
                 0.0
@@ -279,24 +288,24 @@ impl TessieCarHandler {
             }
         };
 
-
-        let amps_to_request = max(
-            0,
-            ((self.max_amps - home_amps_without_car) * 0.95
-        ) as usize,
+        let amps_to_request = min(
+            self.max_amps_car,
+            max(0, ((self.max_amps - home_amps_without_car) * 0.95) as usize),
         );
 
         // If amps to request are equal to the last requested amps, do nothing
         if amps_to_request == last_amps_requested {
-            log::info!("Skipping request car charge to {}A, equal to last request {} seconds ago.", amps_to_request, now - last_amps_requested_time);
+            log::info!(
+                "Skipping request car charge to {}A, equal to last request {} seconds ago.",
+                amps_to_request,
+                now - last_amps_requested_time
+            );
             return Ok(());
         }
 
         // If we are diminishing the amps, do this immediately
         // Otherwise, ask the API only every 30 seconds at most
-        if amps_to_request < last_amps_requested
-            || last_amps_requested_time < now - 30
-        {
+        if amps_to_request < last_amps_requested || last_amps_requested_time < now - 30 {
             let mut guard = self.last_state.lock().await;
             guard.as_mut().map(|x| {
                 x.last_amps_requested = amps_to_request;
@@ -305,7 +314,12 @@ impl TessieCarHandler {
             log::info!("Requesting car charge to {}A", amps_to_request);
             self.set_amps(amps_to_request).await?;
         } else {
-            log::info!("Skipping request car charge to {}A. We requested {}A {} seconds ago.", amps_to_request, last_amps_requested, now - last_amps_requested_time);
+            log::info!(
+                "Skipping request car charge to {}A. We requested {}A {} seconds ago.",
+                amps_to_request,
+                last_amps_requested,
+                now - last_amps_requested_time
+            );
         }
 
         Ok(())
