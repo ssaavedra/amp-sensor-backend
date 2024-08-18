@@ -64,8 +64,10 @@ pub struct TessieDriveState {
     pub gps_as_of: i64,
     pub latitude: f64,
     pub longitude: f64,
-    pub heading: usize,
-    pub speed: usize,
+    pub heading: Option<usize>,
+    pub speed: Option<usize>,
+    pub timestamp: i64,
+    pub power: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -185,7 +187,11 @@ impl TessieAPIHandler {
         let response = self.request("state", reqwest::Method::GET, None).await?;
         let content = response.text().await?;
         serde_json::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
+            .map_err(|e| {
+                log::info!("Tessie: Failed to parse response: {}", e);
+                log::info!("Tessie: Response was: {}", content);
+                anyhow::anyhow!("Failed to parse response: {}", e)
+            })
     }
 
     pub async fn set_charging_amps(&self, amps: usize) -> anyhow::Result<SetChargingAmpsResult> {
