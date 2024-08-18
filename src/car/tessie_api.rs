@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::task::LatLon;
 
+
+/// The possible charging states of the car as reported by the Tessie API.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ChargingState {
     Complete,
@@ -12,6 +14,8 @@ pub enum ChargingState {
     Stopped,
 }
 
+
+/// The posssible states of the charge port latch as reported by the Tessie API.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ChargePortLatch {
     Engaged,
@@ -21,6 +25,9 @@ pub enum ChargePortLatch {
     Unknown(String),
 }
 
+/// The charging state of the car as reported by the Tessie API.
+/// 
+/// This is only an excerpt of the full state.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TessieChargeState {
     pub charge_amps: f64,
@@ -48,6 +55,10 @@ pub struct TessieChargeState {
     pub fast_charger_present: bool,
 }
 
+
+/// The state of the car as reported by the Tessie API.
+/// 
+/// This is only an excerpt of the full state.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TessieDriveState {
     pub gps_as_of: i64,
@@ -65,6 +76,10 @@ pub enum TessieCarWakeState {
     Online,
 }
 
+
+/// The state of the car as reported by the Tessie API.
+/// 
+/// This is only an excerpt of the full state.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TessieCarState {
     access_type: String,
@@ -76,21 +91,44 @@ pub struct TessieCarState {
     pub charge_state: TessieChargeState,
 }
 
+
+/// The result of the [set_charging_amps](TessieAPIHandler::set_charging_amps) method.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SetChargingAmpsResult {
     pub result: bool,
 
-    // Field woke is only present in the response if the car was woken up
+    /// This field is only present in the response if the car was woken up
     #[serde(default)]
     pub woke: bool,
 }
 
+/// The API handler for the Tessie API. This struct is responsible for
+/// interacting with the Tessie API.
+/// 
+/// The Tessie API is a third-party API that provides an abstraction layer on top
+/// of the Tesla API. It provides a more user-friendly way to interact with the
+/// Tesla API, and it abstracts the complexity of refreshing the Tesla OAuth
+/// Tokens and the awake/asleep state of the EV itself.
+/// 
+/// See below for the implemented methods.
 pub struct TessieAPIHandler {
     vin: String,
     token: String,
 }
 
 
+/// Fix the body length for null POST bodies.
+/// 
+/// This is a workaround for the reqwest library not setting the content-length
+/// header for null bodies.
+/// 
+/// According to the HTTP/1.0 specification, the content-length header is
+/// required for POST requests with a body, even if the body is empty, unless
+/// the implementation knows the server is HTTP/1.1 compliant.
+/// 
+/// However, some servers including the Tessie API are not actually
+/// HTTP/1.1-compliant in this regard and will always expect the content-length
+/// header for POST requests.
 fn fix_optional_body(
     request: reqwest::RequestBuilder,
     method: reqwest::Method,

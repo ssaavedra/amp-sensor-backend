@@ -5,8 +5,18 @@ use rocket::tokio::sync::Mutex;
 
 
 
-// TessieFairing schedules a task that will check every minute if the car is nearby
-// our amp meter, and if it's charging.
+/// This fairing checks if the car is nearby and if it's charging.
+/// 
+/// Originally it was implemented as a task that would run every 30 seconds, but
+/// it was changed to run on every response to the Rocket app. This is because
+/// it actually makes sense to react to changes when we know of them happening.
+/// 
+/// This also makes the implementation much simpler, as we don't need to worry
+/// about having a different DB pool.
+/// 
+/// Since requests can come in parallel, by using a Mutex we can ensure that
+/// only one request at a time will check the car status, and we can discard the
+/// other.
 pub struct TessieFairing {
     handler: Arc<Mutex<Option<super::task::TessieCarHandler>>>
 }
@@ -18,6 +28,12 @@ impl TessieFairing {
         }
     }
 
+    /// This function checks if the car is nearby and if it's charging.
+    /// 
+    /// If the car is nearby, it will check if it's charging. If it's charging,
+    /// it will check the average amps drawn by the home from the database over
+    /// the last 30 seconds and update the car API accordingly to not exceed the
+    /// amp limit.
     async fn check_on_response<'r>(&self, req: &rocket::Request<'r>) -> anyhow::Result<()> {
         let _guard = match self.handler.try_lock() {
             Ok(guard) => guard,
@@ -50,6 +66,10 @@ impl TessieFairing {
         Ok(())
     }
 
+    /// This function retrieves the average amps drawn at the location from the
+    /// database over the last 30 seconds.
+    /// 
+    /// It returns a tuple with the average amps and the max amps drawn.
     async fn get_avg_amps_at_location<'r>(&self, req: &rocket::Request<'r>) -> anyhow::Result<(f64, f64)> {
         let db = req.guard::<&crate::Logs>().await.unwrap();
         let token = req.guard::<&crate::ValidDbToken>().await.unwrap();
@@ -75,6 +95,8 @@ impl rocket::fairing::Fairing for TessieFairing {
         }
     }
 
+    /// We initialize the TessieCarHandler and store it in the fairing when the
+    /// Rocket app is ignited.
     async fn on_ignite(&self, rocket: rocket::Rocket<rocket::Build>) -> rocket::fairing::Result<rocket::Rocket<rocket::Build>> {
         let handler = super::task::TessieCarHandler::from_figment(rocket.figment());
         let mut guard = self.handler.lock().await;

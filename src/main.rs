@@ -1,3 +1,42 @@
+//! This application is a simple energy logger that logs energy consumption data
+//! to a SQLite database.
+//! 
+//! The application has a few routes:
+//! - POST /log/:token/ to insert data into the database
+//! - GET /log/:token/html to get the data in HTML format
+//! - GET /log/:token/json to get the data in JSON format
+//! 
+//! There is no built-in token administration or rotation yet. You have to
+//! manually add tokens to the database using the SQLite CLI or a SQLite
+//! database management tool like DB Browser for SQLite.
+//! 
+//! We recommend using a tool such as Python's secrets module to generate
+//! cryptographically secure tokens.
+//! 
+//! ```python
+//! import secrets
+//! token = secrets.token_urlsafe(32)
+//! print(token)
+//! ```
+//! 
+//! The application uses the rocket-governor crate to rate limit the POST
+//! requests to 4 requests per second per IP address, to prevent abuse.
+//! 
+//! The application also uses the rocket-db-pools crate to manage the SQLite
+//! database connection pool.
+//! 
+//! There are a few custom fairings in the application:
+//! - The [AliveCheckFairing](alive_check::AliveCheckFairing) checks if the
+//!   sensor is alive by checking if there has been any input in the last 60
+//!   seconds. If there hasn't been any input, it sends a message via webhook.
+//! - The [TessieFairing](car::tessie_fairing::TessieFairing) uses the
+//!   [Tessie](https://developer.tessie.com/docs/about/) API to get the current
+//!   state of a Tesla EV, and automatically request the EV to charge according
+//!   to a maximum charge budget, dynamically adjusted depending on the total
+//!   energy consumption of the house.
+//! - New fairings like the TessieFairing could be implmented in the future to
+//!   add add other EV platforms or other IoT devices.
+//! 
 use governor::Quota;
 use print_table::get_paginated_rows_for_token;
 use rocket::http::ContentType;
@@ -14,10 +53,13 @@ mod token;
 
 
 
+/// The energy log database pool
 #[derive(Database)]
 #[database("sqlite_logs")]
 struct Logs(sqlx::SqlitePool);
 
+/// Rate limit guard implementation, allowing 4 requests per second per IP
+/// address, bursting up to 15 requests.
 pub struct RateLimitGuard;
 
 impl<'r> RocketGovernable<'r> for RateLimitGuard {
@@ -26,6 +68,7 @@ impl<'r> RocketGovernable<'r> for RateLimitGuard {
     }
 }
 
+/// Expected JSON body for the POST /log/:token/ route
 #[derive(Deserialize)]
 #[serde(crate = "rocket::serde")]
 struct LogData {
@@ -35,9 +78,11 @@ struct LogData {
 }
 
 
+/// User-Agent header
 #[derive(Debug)]
 struct UserAgent<'a>(&'a str);
 
+/// Client IP address
 #[derive(Debug)]
 struct ClientIP(String);
 
@@ -71,7 +116,7 @@ impl<'r> rocket::request::FromRequest<'r> for ClientIP {
 
 /************************* ROUTES *************************/
 
-// Route with POST /log/:token/ will INSERT into the database
+/// Route POST /log/:token/ will INSERT value into the database (if token is valid and rate limit is not exceeded)
 #[post("/log/<_>", data = "<log>", rank = 2)]
 async fn post_token(
     token: &ValidDbToken,
@@ -101,6 +146,7 @@ async fn post_token(
     format!("OK")
 }
 
+/// Route GET /log/:token/html will return the data in HTML format
 #[get("/log/<_>/html?<page>&<count>", rank = 1)]
 async fn list_table_html(
     page: Option<i32>,
@@ -136,6 +182,7 @@ async fn list_table_html(
     (ContentType::HTML, result)
 }
 
+/// Route GET /log/:token/json will return the data in JSON format
 #[get("/log/<_>/json?<page>&<count>", rank = 1)]
 async fn list_table_json(
     page: Option<i32>,
@@ -168,12 +215,21 @@ async fn list_table_json(
     rocket::response::content::RawJson(result)
 }
 
+/// Route GET / will return a simple PONG message. By default we don't advertise
+/// the functionality of the application to the world.
 #[get("/")]
 async fn index(__ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
     log::info!("Got to index!");
     "PONG".to_string()
 }
 
+
+/// Main function to launch the Rocket application
+/// 
+/// This runs the migrations (which are embedded into the binary), attaches the
+/// [AliveCheckFairing](alive_check::AliveCheckFairing), and the
+/// [TessieFairing](car::tessie_fairing::TessieFairing); and mounts the routes
+/// and catchers.
 #[launch]
 async fn rocket() -> _ {
     rocket::build()

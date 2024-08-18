@@ -1,3 +1,20 @@
+//! Task to handle the car API and the home consumption
+//! 
+//! This module contains the main implementation for handling EV charging
+//! according to a budget based on the home consumption and the maximum
+//! available power according to a figment configuration.
+//! 
+//! The current implementation is tied to the [super::tessie_api] module, which
+//! will work for Tesla EVs enrolled in the Tessie API, but a future
+//! implementation could be done to support other EV platforms or IoT devices,
+//! by creating a trait over the EV API and implementing it for each platform.
+//! 
+//! We actually only require two methods from the API:
+//! [TessieAPIHandler::get_state] (we currently use this, but we could split it
+//! into the actually required components, which are the GPS coordinates of the
+//! car, whether it's charging and the amps requested and currently drawn) and
+//! [TessieAPIHandler::set_charging_amps].
+
 use core::panic;
 use std::{cmp::{max, min}, sync::Arc};
 
@@ -6,6 +23,11 @@ use serde::{Deserialize, Serialize};
 
 use super::tessie_api::{ChargingState, TessieAPIHandler, TessieCarState};
 
+
+/// The params to configure the TessieHandler
+/// 
+/// This struct is used to extract the configuration from the figment
+/// configuration in the Rocket.toml file.
 #[derive(Debug)]
 pub(super) struct TessieHandlerParams {
     pub vin: String,
@@ -44,6 +66,20 @@ impl TessieHandlerParams {
     }
 }
 
+
+/// A simple struct to store the car state and the last update time
+/// 
+/// This struct is used to store the car state and the last update time to avoid
+/// querying the car API too often.
+/// 
+/// The last_amps_requested and last_amps_requested_time are used to store the
+/// last requested amps to the car and the time of the request. This is used to
+/// avoid requesting the car to change the amps too often.
+/// 
+/// If the last_amp_requested is different from the current charge state
+/// according to the car API, we will adjust the last_amps_requested to the
+/// value retrieved from the car API, and the time to the current time minus 30
+/// seconds to allow an immediate update.
 #[derive(Debug, Clone)]
 struct TessieCarStateWrapper {
     state: TessieCarState,
@@ -52,6 +88,7 @@ struct TessieCarStateWrapper {
     last_amps_requested_time: i64,
 }
 
+/// A simple struct to store latitude and longitude
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LatLon {
     pub lat: f64,
@@ -88,10 +125,15 @@ pub struct HomeState {
     pub timestamp: i64,
 }
 
+/// A simple cache to store the last home states to log them.
 pub struct HomeStateWrapper {
     state: Vec<HomeState>,
 }
 
+
+/// The main struct to handle information about the car. We use this instead of
+/// the "outer" [TessieFairing](super::tessie_fairing::TessieFairing) to allow
+/// configuring the handler from the figment configuration in the Rocket.
 pub struct TessieCarHandler {
     // API to control the car
     api: TessieAPIHandler,
@@ -151,6 +193,19 @@ impl TessieCarHandler {
         }
     }
 
+    /// Retrieves the state from the car API, and updates the cache
+    /// 
+    /// This function is used to force an update of the state cache from the car
+    /// API. It will update the cache and return the new state. This should only
+    /// be used when we cannot rely on the cache (e.g., when we have just
+    /// updated the charge amps), or when we expect the cache to update sooner
+    /// than usual (e.g., when the charging state is
+    /// [Starting](super::tessie_api::ChargingState::Starting) or
+    /// [Pending](super::tessie_api::ChargingState::Pending)).
+    /// 
+    /// This function will also update the last_amps_requested and
+    /// last_amps_requested_time if the last requested amps are different from
+    /// the current charge state according to the car API.
     async fn force_update_state_cache(&self) -> anyhow::Result<TessieCarState> {
         let (mut last_amps_requested, mut last_amps_requested_time) = self
             .last_state
@@ -182,12 +237,15 @@ impl TessieCarHandler {
         Ok(state)
     }
 
+    /// Forces the next [TessieCarHandler::get_state] call to fetch the state
+    /// from the car API, without performing the call immediately.
     pub async fn invalidate_state_cache(&self) {
         if let Some(state) = self.last_state.lock().await.as_mut() {
             state.last_update = 0;
         }
     }
 
+    /// Wrapper to get the state from the car API, using the cache if possible
     pub async fn get_state(&self) -> anyhow::Result<TessieCarState> {
         // Check if the state is already cached
         // if so, return the cached state unless force=true or the state is older than 30 secs
@@ -200,16 +258,25 @@ impl TessieCarHandler {
         self.force_update_state_cache().await
     }
 
+    /// Get the distance from the car to the charger, as configured from the
+    /// figment.
+    /// 
+    /// Uses the [LatLon::distance] method to calculate the distance in
+    /// kilometers between the car and the charger.
     pub async fn get_car_distance_to_charger(&self) -> anyhow::Result<f64> {
         let state = self.get_state().await?;
         let car_location = LatLon::from(state.drive_state);
         Ok(car_location.distance(&self.charger_location))
     }
+
+    /// Uses [TessieCarHandler::get_car_distance_to_charger] to check if the car
+    /// is nearby, returning true if the distance is less than 0.1km.
     pub async fn is_car_nearby(&self) -> anyhow::Result<bool> {
         let distance = self.get_car_distance_to_charger().await?;
         Ok(distance < 0.1)
     }
 
+    /// Get the charging status from the car API
     pub async fn get_charging_status(&self) -> ChargingState {
         let charging_state = self
             .get_state()
@@ -224,6 +291,7 @@ impl TessieCarHandler {
         charging_state
     }
 
+    /// Get the current amps drawn by the car
     pub async fn get_amps(&self) -> f64 {
         self.get_state()
             .await
@@ -231,12 +299,18 @@ impl TessieCarHandler {
             .unwrap_or(0.0)
     }
 
+    /// Set the charging amps to the car
     pub async fn set_amps(&self, amps: usize) -> anyhow::Result<()> {
         let result = self.api.set_charging_amps(amps).await?;
         log::info!("Set amps to {} result: {:?}", amps, result);
         Ok(())
     }
 
+    /// Set the current home consumption to the cache
+    /// 
+    /// This function is used to be able to calculate the power budget remaining
+    /// for the car to charge. It will store the current home consumption in the
+    /// cache, and keep the last 10 entries.
     pub async fn set_current_home_consumption(
         &self,
         avg_amps: f64,
@@ -257,6 +331,17 @@ impl TessieCarHandler {
         Ok(())
     }
 
+    /// Calculate the amps to request to the car API, and request the change if
+    /// necessary
+    /// 
+    /// This function will calculate the average amps drawn by the home over the
+    /// last 30 seconds, and request the car to charge accordingly. It will
+    /// request the car to charge to the maximum of the configured max_amps_car
+    /// and the remaining budget after the home consumption.
+    /// 
+    /// The function will only request the car to change the amps if the last
+    /// request was higher (because this means we are immediately over-budget),
+    /// or at least 30 seconds have passed since the last request.
     pub async fn throttled_calculate_amps(&self) -> anyhow::Result<()> {
         // Only change amps if they are *less* or at least 30 seconds have passed since the last change
         let (last_amps_requested, last_amps_requested_time) = self
