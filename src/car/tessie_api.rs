@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use super::task::LatLon;
 
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ChargingState {
     Complete,
@@ -19,13 +18,13 @@ pub enum ChargePortLatch {
     Disengaged,
 
     #[serde(untagged)]
-    Unknown(String)
+    Unknown(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TessieChargeState {
     pub charge_amps: f64,
-    pub charge_current_request: f64,
+    pub charge_current_request: usize,
     pub charge_enable_request: bool,
     pub charge_energy_added: f64,
     pub charge_limit_soc: usize,
@@ -80,14 +79,40 @@ pub struct TessieCarState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SetChargingAmpsResult {
     pub result: bool,
+
+    // Field woke is only present in the response if the car was woken up
+    #[serde(default)]
     pub woke: bool,
 }
-
-
 
 pub struct TessieAPIHandler {
     vin: String,
     token: String,
+}
+
+
+fn fix_optional_body(
+    request: reqwest::RequestBuilder,
+    method: reqwest::Method,
+    body: Option<String>,
+) -> reqwest::RequestBuilder {
+    match method {
+        reqwest::Method::GET => request,
+        reqwest::Method::POST => match body {
+            Some(body) => {
+                let body = reqwest::Body::from(body);
+                let len = body.as_bytes().map(|b| b.len()).unwrap_or(0);
+                request
+                    .header(reqwest::header::CONTENT_LENGTH, len.to_string())
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body)
+            }
+            None => request
+                .header(reqwest::header::CONTENT_LENGTH, "0")
+                .header(reqwest::header::CONTENT_TYPE, "application/json"),
+        },
+        _ => request,
+    }
 }
 
 impl TessieAPIHandler {
@@ -95,34 +120,56 @@ impl TessieAPIHandler {
         Self { vin, token }
     }
 
-    async fn request(&self, endpoint: &str, method: reqwest::Method, body: Option<String>) -> Result<reqwest::Response, reqwest::Error> {
+    async fn request(
+        &self,
+        endpoint: &str,
+        method: reqwest::Method,
+        body: Option<String>,
+    ) -> Result<reqwest::Response, reqwest::Error> {
         let client = reqwest::Client::new();
         let url = format!("https://api.tessie.com/{}/{}", self.vin, endpoint);
-        let request = client.request(method, &url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Content-Type", "application/json")
-            .body(body.unwrap_or("".to_string()))
-            .build()?;
+        let request = fix_optional_body(
+            client
+                .request(method.clone(), &url)
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", self.token),
+                )
+                .header(reqwest::header::ACCEPT, "application/json"),
+            method,
+            body,
+        )
+        .build()?;
         client.execute(request).await
     }
 
     pub async fn get_state(&self) -> anyhow::Result<TessieCarState> {
         let response = self.request("state", reqwest::Method::GET, None).await?;
         let content = response.text().await?;
-        serde_json::from_str(&content).map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
+        serde_json::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
     }
 
-    pub async fn set_charging_amps(&self, amps: usize) -> Result<SetChargingAmpsResult, reqwest::Error> {
-        let endpoint = format!("command/set_charging_amps?wait_for_completion=true&amps={}", amps);
+    pub async fn set_charging_amps(&self, amps: usize) -> anyhow::Result<SetChargingAmpsResult> {
+        let endpoint = format!(
+            "command/set_charging_amps?wait_for_completion=true&amps={}",
+            amps
+        );
+        log::info!("Tessie: Sending request to endpoint: {}", endpoint);
         let response = self.request(&endpoint, reqwest::Method::POST, None).await?;
-        response.json::<SetChargingAmpsResult>().await
+        let bytes = response.error_for_status()?.text().await;
+        log::info!("Tessie: Received response: {}", bytes.as_ref().unwrap());
+        serde_json::from_str(&bytes.unwrap())
+            .map_err(|e| anyhow::anyhow!("Failed to parse response: {}", e))
     }
-
 }
 
 impl From<TessieDriveState> for LatLon {
     fn from(state: TessieDriveState) -> Self {
-        Self { lat: state.latitude, lon: state.longitude }
+        Self {
+            lat: state.latitude,
+            lon: state.longitude,
+        }
     }
 }
 

@@ -19,7 +19,13 @@ impl TessieFairing {
     }
 
     async fn check_on_response<'r>(&self, req: &rocket::Request<'r>) -> anyhow::Result<()> {
-        let _guard = self.handler.lock().await;
+        let _guard = match self.handler.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                log::info!("Car handler is currently locked, skipping check on this response.");
+                return Ok(())
+            }, // Ignore if the lock is currently being held elsewhere
+        };
         let handler = _guard.as_ref().unwrap();
         // 1. Check that the car is nearby
         // 2. Check if the car is charging
@@ -77,11 +83,14 @@ impl rocket::fairing::Fairing for TessieFairing {
         Ok(rocket)
     }
 
-    async fn on_response<'r>(&self, req: &'r rocket::Request<'_> , res: &mut rocket::Response<'r>) -> () {
+    async fn on_response<'r>(&self, req: &'r rocket::Request<'_> , _res: &mut rocket::Response<'r>) -> () {
         // Is this a request to log info?
         let route_name = req.route().map(|route| route.name.as_deref()).flatten().unwrap_or("");
         if route_name == "post_token" {
-            let _ = self.check_on_response(req).await;
+            match self.check_on_response(req).await {
+                Ok(_) => log::info!("Car check succeeded."),
+                Err(e) => log::error!("Car check failure: {}", e),
+            }
         }
     }
 
