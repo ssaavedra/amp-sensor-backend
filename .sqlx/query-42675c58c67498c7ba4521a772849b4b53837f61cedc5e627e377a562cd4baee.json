@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location \n        FROM energy_log\n        INNER JOIN tokens t\n        ON t.token = energy_log.token\n        INNER JOIN users u\n        ON u.id = t.user_id\n        WHERE energy_log.token = ?\n        ORDER BY created_at DESC\n        LIMIT ?\n        OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "amps",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "volts",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "watts",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "user_agent",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_ip",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "token",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "location",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "42675c58c67498c7ba4521a772849b4b53837f61cedc5e627e377a562cd4baee"
+}

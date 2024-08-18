@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT AVG(amps) as avg_amps, MAX(amps) as max_amps FROM energy_log WHERE token = ? AND created_at > datetime('now', '-30 seconds')",
+  "describe": {
+    "columns": [
+      {
+        "name": "avg_amps",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "max_amps",
+        "ordinal": 1,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "0ff153dbcc929a091660d71b59f8d2c0ae78e86a89b44ce0dbee55740cd536e7"
+}
