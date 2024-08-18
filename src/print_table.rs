@@ -95,9 +95,9 @@ pub async fn get_paginated_rows_for_token(
             &row.token,
             &row.created_at.to_string(),
             ua,
-            row.amps.parse::<f64>().unwrap_or(0f64),
-            row.volts.parse::<f64>().unwrap_or(0f64),
-            row.watts.parse::<f64>().unwrap_or(0f64),
+            row.amps,
+            row.volts,
+            row.watts,
         ));
     }
     let has_next = db_rows.len() > count as usize;

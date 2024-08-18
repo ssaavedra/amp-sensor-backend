@@ -48,11 +48,14 @@ impl TessieFairing {
         let db = req.guard::<&crate::Logs>().await.unwrap();
         let token = req.guard::<&crate::ValidDbToken>().await.unwrap();
         
-        let query = format!("SELECT AVG(amps), MAX(amps) FROM energy_log WHERE token = '?' AND created_at > datetime('now', '-30 seconds')");
-        let (avg_amps, max_amps): (f64, f64) = sqlx::query_as(&query)
-            .bind(&token.0)
+        log::info!("Checking average amps drawn at location for token: {}", token.0);
+        let result = sqlx::query!("SELECT AVG(amps) as avg_amps, MAX(amps) as max_amps FROM energy_log WHERE token = ? AND created_at > datetime('now', '-30 seconds')", token.0)
             .fetch_one(&**db)
             .await?;
+        let avg_amps: f64 = result.avg_amps.unwrap_or(0.0);
+        let max_amps: f64 = result.max_amps.unwrap_or(0.0);
+        log::info!("Retrieved average amps: {} and max amps: {}", avg_amps, max_amps);
+
         Ok((avg_amps, max_amps))
     }
 }
