@@ -183,7 +183,7 @@ async fn rocket() -> _ {
             sqlx::migrate!("./migrations").run(&**db).await.unwrap();
             rocket
         }))
-        .attach(alive_check::AliveCheckFairing::new(""))
+        .attach(alive_check::AliveCheckFairing::new())
         .attach(car::tessie_fairing::TessieFairing::new())
         .mount(
             "/",
