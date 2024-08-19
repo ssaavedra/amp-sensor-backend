@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 governor = "0.6.3"
 log = "0.4.21"
-reqwest = { version = "0.12.4", features = ["json"] }
+reqwest = { version = "0.12.5", features = ["json"] }
 rocket = { version = "0.5.1", features = ["json"], default-features = false }
 rocket_db_pools = { version = "0.2.0", features = ["sqlx_sqlite"] }
 rocket-governor = { version = "0.2.0-rc.3", features = ["limit_info", "logger"] }
