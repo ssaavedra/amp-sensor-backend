@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT token, amps, volts, watts, created_at, user_agent, client_ip FROM energy_log WHERE created_at < ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "token",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "amps",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "volts",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "watts",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "user_agent",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_ip",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "632857fb6ac60ed97a5203a7993f5d991461c4255a601ff8b4f6bd6300d414f8"
+}

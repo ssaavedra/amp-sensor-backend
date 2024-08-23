@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT token FROM tokens",
+  "describe": {
+    "columns": [
+      {
+        "name": "token",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "afc5d9af537ea74e1fb90529d3a4d2f6868db3bd678a8ba9cd09a02ba1704ddc"
+}

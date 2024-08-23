@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO energy_log (token, amps, volts, watts, created_at, user_agent, client_ip) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "149000d4a879c809f77fafd73a7cebe8285ae42c4c85211dde1a3fbfd844812c"
+}

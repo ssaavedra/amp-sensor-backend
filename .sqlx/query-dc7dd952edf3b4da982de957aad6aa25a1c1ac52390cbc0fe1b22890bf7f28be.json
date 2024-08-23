@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "CREATE UNIQUE INDEX IF NOT EXISTS unique_token_created_at ON energy_log (token, created_at)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "dc7dd952edf3b4da982de957aad6aa25a1c1ac52390cbc0fe1b22890bf7f28be"
+}
