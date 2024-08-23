@@ -29,13 +29,13 @@
 //! - The [AliveCheckFairing](alive_check::AliveCheckFairing) checks if the
 //!   sensor is alive by checking if there has been any input in the last 60
 //!   seconds. If there hasn't been any input, it sends a message via webhook.
-//! - The [TessieFairing](car::tessie_fairing::TessieFairing) uses the
-//!   [Tessie](https://developer.tessie.com/docs/about/) API to get the current
-//!   state of a Tesla EV, and automatically request the EV to charge according
-//!   to a maximum charge budget, dynamically adjusted depending on the total
-//!   energy consumption of the house.
-//! - New fairings like the TessieFairing could be implmented in the future to
-//!   add add other EV platforms or other IoT devices.
+//! - The [EVChargeFairing](car::fairing::EVChargeFairing) automatically
+//!   requests an EV to charge according to a maximum charge budget, dynamically
+//!   adjusted depending on the total energy consumption of the house. It
+//!   requires an [car::EVChargeHandler] as a type parameter, and the current
+//!   implementation uses [car::tessie]
+//! - New fairings like the EVChargeFairing could be implmented in the future to
+//!   add add other IoT devices or additional functionality.
 //! 
 use governor::Quota;
 use print_table::get_paginated_rows_for_token;
@@ -223,8 +223,8 @@ async fn index(_ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
 /// 
 /// This runs the migrations (which are embedded into the binary), attaches the
 /// [AliveCheckFairing](alive_check::AliveCheckFairing), and the
-/// [TessieFairing](car::tessie_fairing::TessieFairing); and mounts the routes
-/// and catchers.
+/// [car::fairing::EVChargeFairing] (with the [tessie
+/// implementation](car::tessie)); and mounts the routes and catchers.
 #[launch]
 async fn rocket() -> _ {
     rocket::build()
@@ -235,7 +235,7 @@ async fn rocket() -> _ {
             rocket
         }))
         .attach(alive_check::AliveCheckFairing::new())
-        .attach(car::tessie_fairing::TessieFairing::new())
+        .attach(car::fairing::EVChargeFairing::<car::tessie::Handler>::new())
         .mount(
             "/",
             routes![index, list_table_html, list_table_json, post_token],

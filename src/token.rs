@@ -10,8 +10,8 @@ pub trait Token {
 }
 
 /// This struct is used to store a token. This token is not validated in any
-/// way. If you need a valid token, use [`ValidDbToken`] in a
-/// [`Guard`](rocket::request::Guard) instead.
+/// way. If you need a valid token, use [`ValidDbToken`] in a rocket guard
+/// instead.
 pub struct DbToken(pub String);
 
 impl Token for DbToken {
@@ -24,7 +24,7 @@ impl Token for DbToken {
 /// This struct is used to store the token that is passed in the URL.
 /// 
 /// The second argument is a private unit struct, which is used to statically
-/// ensure that the token can only be created by the `FromRequest`
+/// ensure that the token can only be created by its `FromRequest`
 /// implementation.
 pub struct ValidDbToken(pub DbToken, ());
 

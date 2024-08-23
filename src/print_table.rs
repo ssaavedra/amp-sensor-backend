@@ -54,6 +54,7 @@ impl RowInfo {
         }
     }
 
+    /// Returns the row as an HTML table row
     pub fn to_html(&self) -> String {
         format!(
             "<tr><td>{} ({}/{})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
@@ -67,6 +68,7 @@ impl RowInfo {
         )
     }
 
+    /// Returns the row as a JSON object
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "location": self.location,
@@ -79,6 +81,9 @@ impl RowInfo {
     }
 }
 
+/// Returns the rows from the database for a given token and page as tuple with
+/// a vector of [RowInfo] structs and a boolean that indicates if there are more
+/// rows to be fetched.
 pub async fn get_paginated_rows_for_token(
     db: &mut Connection<crate::Logs>,
     token: &ValidDbToken,

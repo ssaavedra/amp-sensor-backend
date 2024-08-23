@@ -1,10 +1,22 @@
+//! This module contains the API handler for the Tessie API.
+//! 
+//! The Tessie API is a third-party API that provides an abstraction layer on
+//! top of the Tesla API. It provides a more user-friendly way to interact with
+//! the Tesla API, and it abstracts the complexity of refreshing the Tesla OAuth
+//! Tokens and the awake/asleep state of the EV itself.
+//! 
+//! See more about the API documentation at
+//! [Tessie](https://developer.tessie.com/docs/about/). Only a tiny subset of
+//! the API is implemented in this module.
+
 use serde::{Deserialize, Serialize};
 
-use super::task::LatLon;
+use crate::car::LatLon;
+
 
 
 /// The possible charging states of the car as reported by the Tessie API.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum ChargingState {
     Complete,
     Charging,
@@ -107,59 +119,32 @@ pub struct SetChargingAmpsResult {
 /// The API handler for the Tessie API. This struct is responsible for
 /// interacting with the Tessie API.
 /// 
-/// The Tessie API is a third-party API that provides an abstraction layer on top
-/// of the Tesla API. It provides a more user-friendly way to interact with the
-/// Tesla API, and it abstracts the complexity of refreshing the Tesla OAuth
+/// The Tessie API is a third-party API that provides an abstraction layer on
+/// top of the Tesla API. It provides a more user-friendly way to interact with
+/// the Tesla API, and it abstracts the complexity of refreshing the Tesla OAuth
 /// Tokens and the awake/asleep state of the EV itself.
-/// 
-/// See below for the implemented methods.
 pub struct TessieAPIHandler {
     vin: String,
     token: String,
 }
 
 
-/// Fix the body length for null POST bodies.
-/// 
-/// This is a workaround for the reqwest library not setting the content-length
-/// header for null bodies.
-/// 
-/// According to the HTTP/1.0 specification, the content-length header is
-/// required for POST requests with a body, even if the body is empty, unless
-/// the implementation knows the server is HTTP/1.1 compliant.
-/// 
-/// However, some servers including the Tessie API are not actually
-/// HTTP/1.1-compliant in this regard and will always expect the content-length
-/// header for POST requests.
-fn fix_optional_body(
-    request: reqwest::RequestBuilder,
-    method: reqwest::Method,
-    body: Option<String>,
-) -> reqwest::RequestBuilder {
-    match method {
-        reqwest::Method::GET => request,
-        reqwest::Method::POST => match body {
-            Some(body) => {
-                let body = reqwest::Body::from(body);
-                let len = body.as_bytes().map(|b| b.len()).unwrap_or(0);
-                request
-                    .header(reqwest::header::CONTENT_LENGTH, len.to_string())
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .body(body)
-            }
-            None => request
-                .header(reqwest::header::CONTENT_LENGTH, "0")
-                .header(reqwest::header::CONTENT_TYPE, "application/json"),
-        },
-        _ => request,
+
+
+impl From<&rocket::figment::Figment> for TessieAPIHandler {
+    #[inline(always)]
+    fn from(figment: &rocket::figment::Figment) -> Self {
+        let vin = figment
+            .extract_inner("car_vin")
+            .unwrap_or_else(|_| panic!("Missing VIN"));
+        let token = figment
+            .extract_inner("tessie_token")
+            .unwrap_or_else(|_| panic!("Missing token"));
+        Self { vin, token }
     }
 }
 
 impl TessieAPIHandler {
-    pub fn new(vin: String, token: String) -> Self {
-        Self { vin, token }
-    }
-
     async fn request(
         &self,
         endpoint: &str,
@@ -221,5 +206,42 @@ impl From<TessieDriveState> for LatLon {
 impl From<TessieCarState> for LatLon {
     fn from(state: TessieCarState) -> Self {
         LatLon::from(state.drive_state)
+    }
+}
+
+
+/// Fix the body length for null POST bodies.
+/// 
+/// This is a workaround for the reqwest library not setting the content-length
+/// header for null bodies.
+/// 
+/// According to the HTTP/1.0 specification, the content-length header is
+/// required for POST requests with a body, even if the body is empty, unless
+/// the implementation knows the server is HTTP/1.1 compliant.
+/// 
+/// However, some servers including the Tessie API are not actually
+/// HTTP/1.1-compliant in this regard and will always expect the content-length
+/// header for POST requests.
+fn fix_optional_body(
+    request: reqwest::RequestBuilder,
+    method: reqwest::Method,
+    body: Option<String>,
+) -> reqwest::RequestBuilder {
+    match method {
+        reqwest::Method::GET => request,
+        reqwest::Method::POST => match body {
+            Some(body) => {
+                let body = reqwest::Body::from(body);
+                let len = body.as_bytes().map(|b| b.len()).unwrap_or(0);
+                request
+                    .header(reqwest::header::CONTENT_LENGTH, len.to_string())
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body)
+            }
+            None => request
+                .header(reqwest::header::CONTENT_LENGTH, "0")
+                .header(reqwest::header::CONTENT_TYPE, "application/json"),
+        },
+        _ => request,
     }
 }
