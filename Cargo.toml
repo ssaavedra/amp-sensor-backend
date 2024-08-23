@@ -5,6 +5,16 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+default-run = "amp-sensor-tessie-backend"
+
+[[bin]]
+name = "amp-sensor-tessie-backend"
+path = "src/main.rs"
+
+[[bin]]
+name = "amp-sensor-backend-consolidate-logs"
+path = "src/cli/consolidate_logs.rs"
+
 [dependencies]
 governor = "0.6.3"
 log = "0.4.22"
