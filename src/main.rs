@@ -50,6 +50,7 @@ mod alive_check;
 mod car;
 mod print_table;
 mod token;
+mod cli;
 
 
 
@@ -227,6 +228,13 @@ async fn index(_ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
 /// implementation](car::tessie)); and mounts the routes and catchers.
 #[launch]
 async fn rocket() -> _ {
+    // Check if we are being called with the `consolidate_logs` argument, in which case we run the consolidation function
+    // instead of starting the Rocket server
+    if std::env::args().nth(1).is_some() {
+        crate::cli::consolidate_logs::consolidate_logs_cli().await;
+        std::process::exit(0);
+    }
+
     rocket::build()
         .attach(Logs::init())
         .attach(fairing::AdHoc::on_ignite("Run DB migrations", |rocket| async {

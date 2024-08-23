@@ -1,90 +1,85 @@
 // Requests the sqlite database as a parameter
 // And makes it so that for every log entry from yesterday or before only the average of each minute is stored in the database
 
+use super::types::DbRow;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::sqlite::SqlitePool;
-use types::DbRow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process;
-mod types;
-
 
 /// Consolidate logs from the source database into the consolidated database.
-/// 
+///
 /// This script will:
 /// - Create the consolidated database if it does not exist.
 /// - Ensure that all users and tokens from the source database exist in the consolidated database.
 /// - Consolidate all logs from the source database into the consolidated database (without duplicates).
-/// 
+///
 /// After this, the consolidated database will contain the same data as the source database, but with
 /// logs consolidated by minute. You can then use the consolidated database for analysis.
-/// 
+///
 /// You can delete old contents from the source database after running this script with the following SQL:
 /// ```sql
 /// DELETE FROM energy_log WHERE created_at < strftime('%s', 'now', '-1 day');
 /// VACUUM;
 /// ```
-/// 
+///
 /// # Usage
-/// 
+///
 /// ```sh
-/// cargo run --bin consolidate_logs <sqlite database> <consolidated sqlite database>
+/// cargo run consolidate_logs <sqlite database> <consolidated sqlite database>
 /// ```
-fn main() {
+pub async fn consolidate_logs_cli() -> () {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
+    if args.len() != 4 {
         eprintln!(
-            "Usage: {} <sqlite database> <consolidated sqlite database>",
+            "Usage: {} consolidate_logs <sqlite database> <consolidated sqlite database>",
             args[0]
         );
         process::exit(1);
     }
 
-    let db_path = Path::new(&args[1]);
+    let db_path = Path::new(&args[2]);
+    let db_consolidated_path = Path::new(&args[3]);
+
     if !db_path.exists() {
         eprintln!("Error: {} does not exist", db_path.display());
         process::exit(1);
     }
-    let db_consolidated_path = Path::new(&args[2]);
 
-    rocket::tokio::runtime::Runtime::new()
+    if !sqlx::Sqlite::database_exists(db_consolidated_path.to_str().unwrap())
+        .await
         .unwrap()
-        .block_on(async {
-            if !sqlx::Sqlite::database_exists(db_consolidated_path.to_str().unwrap())
-                .await
-                .unwrap()
-            {
-                eprintln!(
-                    "Error: {} does not exist yet. Creating.",
-                    db_consolidated_path.display()
-                );
-                sqlx::Sqlite::create_database(&db_consolidated_path.to_str().unwrap())
-                    .await
-                    .unwrap();
-            }
-            let db_consolidated = SqlitePool::connect(&args[2]).await.unwrap();
+    {
+        eprintln!(
+            "Error: {} does not exist yet. Creating.",
+            db_consolidated_path.display()
+        );
+        sqlx::Sqlite::create_database(&db_consolidated_path.to_str().unwrap())
+            .await
+            .unwrap();
+    }
+    let db_consolidated = SqlitePool::connect(db_consolidated_path.to_str().unwrap())
+        .await
+        .unwrap();
 
-            eprintln!("Ensuring migrations are up to date");
-            sqlx::migrate!("./migrations")
-                .run(&db_consolidated)
-                .await
-                .unwrap();
-            eprintln!("Migrations complete. Database ready to use.");
+    eprintln!("Ensuring migrations are up to date");
+    sqlx::migrate!("./migrations")
+        .run(&db_consolidated)
+        .await
+        .unwrap();
+    eprintln!("Migrations complete. Database ready to use.");
 
-            let db = SqlitePool::connect(&args[1]).await.unwrap();
+    let db = SqlitePool::connect(db_path.to_str().unwrap()).await.unwrap();
 
-            ensure_users_and_tokens_exist(&db, &db_consolidated)
-                .await
-                .expect("Error ensuring users and tokens exist");
+    ensure_users_and_tokens_exist(&db, &db_consolidated)
+        .await
+        .expect("Error ensuring users and tokens exist");
 
-            consolidate_logs(&db, &db_consolidated).await;
-        });
+    consolidate_logs(&db, &db_consolidated).await;
 }
-
-
 
 async fn ensure_users_and_tokens_exist(
     db: &SqlitePool,
@@ -235,9 +230,12 @@ async fn consolidate_logs(db: &SqlitePool, db_consolidated: &SqlitePool) {
         original_item_count, map_len
     );
 
-    println!("Total rows in the consolidated database: {}", sqlx::query!("SELECT COUNT(*) as count FROM energy_log")
-        .fetch_one(db_consolidated)
-        .await
-        .unwrap()
-        .count);
+    println!(
+        "Total rows in the consolidated database: {}",
+        sqlx::query!("SELECT COUNT(*) as count FROM energy_log")
+            .fetch_one(db_consolidated)
+            .await
+            .unwrap()
+            .count
+    );
 }
