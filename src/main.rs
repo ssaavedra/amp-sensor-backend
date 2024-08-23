@@ -211,6 +211,25 @@ async fn list_table_json(
     rocket::response::content::RawJson(serde_json::to_string_pretty(&result).unwrap())
 }
 
+
+
+/// Route GET /log/:token/html will return the data in HTML format
+#[get("/log/<_>/svg?<page>&<count>", rank = 1)]
+async fn list_table_svg(
+    page: Option<i32>,
+    count: Option<i32>,
+    token: &ValidDbToken,
+    mut db: Connection<Logs>,
+    _ratelimit: RocketGovernor<'_, RateLimitGuard>,
+) -> (ContentType, String) {
+    let page = page.unwrap_or(0);
+    let count = count.unwrap_or(5000);
+
+    let (rows, _has_next) = get_paginated_rows_for_token(&mut db, &token, page, count).await;
+
+    (ContentType::SVG, print_table::to_svg_plot(rows))
+}
+
 /// Route GET / will return a simple PONG message. By default we don't advertise
 /// the functionality of the application to the world.
 #[get("/")]
@@ -246,7 +265,7 @@ async fn rocket() -> _ {
         .attach(car::fairing::EVChargeFairing::<car::tessie::Handler>::new())
         .mount(
             "/",
-            routes![index, list_table_html, list_table_json, post_token],
+            routes![index, list_table_html, list_table_json, list_table_svg, post_token],
         )
         .register("/", catchers![rocket_governor_catcher])
 }

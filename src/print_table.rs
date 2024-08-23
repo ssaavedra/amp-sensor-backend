@@ -1,18 +1,17 @@
 //! A simple module to help print the energy log table in HTML and JSON format.
-//! 
+//!
 //! This module contains the [RowInfo] struct that represents a row in the energy
 //! log table. It also contains the [get_paginated_rows_for_token] function that
 //! retrieves the rows from the database for a given token and page.
-//! 
+//!
 //! The rows are returned as a vector of [RowInfo] structs, and a boolean that
 //! indicates if there are more rows to be fetched.
 
+use chrono::NaiveDateTime;
 use rocket_db_pools::Connection;
 use serde::Serialize;
 
 use crate::token::{DbToken, Token, ValidDbToken};
-
-
 
 pub struct RowInfo {
     location: String,
@@ -121,7 +120,11 @@ pub async fn get_paginated_rows_for_token(
     };
 
     for row in db_rows_split {
-        let ua = row.user_agent.as_ref().map(|s| s.as_str()).unwrap_or("Unknown");
+        let ua = row
+            .user_agent
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown");
         rows.push(RowInfo::new(
             &row.location,
             DbToken(row.token.to_string()),
@@ -135,4 +138,38 @@ pub async fn get_paginated_rows_for_token(
     let has_next = db_rows.len() > count as usize;
 
     (rows, has_next)
+}
+
+pub fn to_svg_plot(rows: Vec<RowInfo>) -> String {
+    use poloto::build;
+
+    let first_timestamp = NaiveDateTime::parse_from_str(
+        &rows.first().unwrap().datetime, "%Y-%m-%d %H:%M:%S",
+    ).expect("DateTime format failed").and_utc().timestamp();
+
+    let amps: Vec<(i128, i128)> = rows.iter().map(|r| (NaiveDateTime::parse_from_str(
+        &r.datetime, "%Y-%m-%d %H:%M:%S",
+    ).unwrap().and_utc().timestamp() as i128, (r.amps * 1000.0) as i128)).collect::<Vec<_>>();
+    let iter = amps.iter();
+
+    let p = poloto::plots!(
+        poloto::build::plot("amps").line(build::cloned(iter)),
+    );
+
+    let hr = {
+            // Calculate so that we don't overflow the labels
+            30 * 60 * (amps.len() as f64 / 2000.0).ceil() as i128
+    };
+
+    let xticks =
+    poloto::ticks::TickDistribution::new(std::iter::successors(Some(0), |w| Some(w + hr)))
+        .with_tick_fmt(|&v| {
+            format!("{}", chrono::DateTime::<chrono::Utc>::from_timestamp(v as i64, 0).unwrap().format("%H:%M"))
+        });
+
+    let data = poloto::frame_build().data(p).map_xticks(|_| xticks);
+
+    println!("First and last timetamps are: {:?} {:?}", chrono::DateTime::<chrono::Utc>::from_timestamp(first_timestamp, 0).unwrap().format("%H:%M"), chrono::DateTime::<chrono::Utc>::from_timestamp(amps.last().unwrap().0 as i64, 0).unwrap().format("%H:%M"));
+
+    data.build_and_label(("Amps over time", "Time", "Amps")).append_to(poloto::header().light_theme()).render_string().expect("Failed to render SVG")
 }
