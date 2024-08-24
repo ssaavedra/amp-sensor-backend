@@ -1,30 +1,30 @@
 //! This application is a simple energy logger that logs energy consumption data
 //! to a SQLite database.
-//! 
+//!
 //! The application has a few routes:
 //! - POST /log/:token/ to insert data into the database
 //! - GET /log/:token/html to get the data in HTML format
 //! - GET /log/:token/json to get the data in JSON format
-//! 
+//!
 //! There is no built-in token administration or rotation yet. You have to
 //! manually add tokens to the database using the SQLite CLI or a SQLite
 //! database management tool like DB Browser for SQLite.
-//! 
+//!
 //! We recommend using a tool such as Python's secrets module to generate
 //! cryptographically secure tokens.
-//! 
+//!
 //! ```python
 //! import secrets
 //! token = secrets.token_urlsafe(32)
 //! print(token)
 //! ```
-//! 
+//!
 //! The application uses the rocket-governor crate to rate limit the POST
 //! requests to 4 requests per second per IP address, to prevent abuse.
-//! 
+//!
 //! The application also uses the rocket-db-pools crate to manage the SQLite
 //! database connection pool.
-//! 
+//!
 //! There are a few custom fairings in the application:
 //! - The [AliveCheckFairing](alive_check::AliveCheckFairing) checks if the
 //!   sensor is alive by checking if there has been any input in the last 60
@@ -36,9 +36,10 @@
 //!   implementation uses [car::tessie]
 //! - New fairings like the EVChargeFairing could be implmented in the future to
 //!   add add other IoT devices or additional functionality.
-//! 
+//!
+use form::ParseableDateTime;
 use governor::Quota;
-use print_table::get_paginated_rows_for_token;
+use print_table::{get_avg_max_rows_for_token, get_paginated_rows_for_token};
 use rocket::http::ContentType;
 use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
@@ -48,11 +49,10 @@ use token::{Token, ValidDbToken};
 
 mod alive_check;
 mod car;
+mod cli;
+pub mod form;
 mod print_table;
 mod token;
-mod cli;
-
-
 
 /// The energy log database pool
 #[derive(Database)]
@@ -77,7 +77,6 @@ struct LogData {
     volts: Option<f64>,
     watts: f64,
 }
-
 
 /// User-Agent header
 #[derive(Debug)]
@@ -198,7 +197,12 @@ async fn list_table_json(
     let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count).await;
 
     let next_url = if has_next {
-        format!("/log/{}/json?page={}&count={}", token.full_token(), page + 1, count)
+        format!(
+            "/log/{}/json?page={}&count={}",
+            token.full_token(),
+            page + 1,
+            count
+        )
     } else {
         "".to_string()
     };
@@ -212,22 +216,26 @@ async fn list_table_json(
 }
 
 
-
 /// Route GET /log/:token/html will return the data in HTML format
-#[get("/log/<_>/svg?<page>&<count>", rank = 1)]
+#[get("/log/<_>/svg?<start>&<end>&<interval>", rank = 1)]
 async fn list_table_svg(
-    page: Option<i32>,
-    count: Option<i32>,
+    start: Option<ParseableDateTime>,
+    end: Option<ParseableDateTime>,
+    interval: Option<i32>,
     token: &ValidDbToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
-    let page = page.unwrap_or(0);
-    let count = count.unwrap_or(5000);
+    let start = start
+        .unwrap_or(ParseableDateTime(
+            chrono::Utc::now() - chrono::Duration::days(1),
+        ));
+    let end = end.unwrap_or(ParseableDateTime(chrono::Utc::now()));
+    let interval = interval.unwrap_or(300);
 
-    let (rows, _has_next) = get_paginated_rows_for_token(&mut db, &token, page, count).await;
+    let (avg, max) = get_avg_max_rows_for_token(&mut db, &token, &start, &end, interval).await;
 
-    (ContentType::SVG, print_table::to_svg_plot(rows))
+    (ContentType::SVG, print_table::to_svg_plot(avg, max))
 }
 
 /// Route GET / will return a simple PONG message. By default we don't advertise
@@ -238,9 +246,8 @@ async fn index(_ratelimit: RocketGovernor<'_, RateLimitGuard>) -> String {
     "PONG".to_string()
 }
 
-
 /// Main function to launch the Rocket application
-/// 
+///
 /// This runs the migrations (which are embedded into the binary), attaches the
 /// [AliveCheckFairing](alive_check::AliveCheckFairing), and the
 /// [car::fairing::EVChargeFairing] (with the [tessie
@@ -256,16 +263,25 @@ async fn rocket() -> _ {
 
     rocket::build()
         .attach(Logs::init())
-        .attach(fairing::AdHoc::on_ignite("Run DB migrations", |rocket| async {
-            let db = Logs::fetch(&rocket).expect("DB connection");
-            sqlx::migrate!("./migrations").run(&**db).await.unwrap();
-            rocket
-        }))
+        .attach(fairing::AdHoc::on_ignite(
+            "Run DB migrations",
+            |rocket| async {
+                let db = Logs::fetch(&rocket).expect("DB connection");
+                sqlx::migrate!("./migrations").run(&**db).await.unwrap();
+                rocket
+            },
+        ))
         .attach(alive_check::AliveCheckFairing::new())
         .attach(car::fairing::EVChargeFairing::<car::tessie::Handler>::new())
         .mount(
             "/",
-            routes![index, list_table_html, list_table_json, list_table_svg, post_token],
+            routes![
+                index,
+                list_table_html,
+                list_table_json,
+                list_table_svg,
+                post_token
+            ],
         )
         .register("/", catchers![rocket_governor_catcher])
 }

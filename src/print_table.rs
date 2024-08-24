@@ -7,7 +7,7 @@
 //! The rows are returned as a vector of [RowInfo] structs, and a boolean that
 //! indicates if there are more rows to be fetched.
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime};
 use rocket_db_pools::Connection;
 use serde::Serialize;
 
@@ -140,38 +140,122 @@ pub async fn get_paginated_rows_for_token(
     (rows, has_next)
 }
 
-pub fn to_svg_plot(rows: Vec<RowInfo>) -> String {
+
+/// Returns the rows from the database for a given token and page as tuple with
+/// a vector of [RowInfo] structs between the given timestamps. It returns two
+/// vectors: one with the averages and one with the maximums given the window
+/// interval passed as a parameter.
+pub async fn get_avg_max_rows_for_token<Tz: chrono::TimeZone>(
+    db: &mut Connection<crate::Logs>,
+    token: &ValidDbToken,
+    start: &DateTime<Tz>,
+    end: &DateTime<Tz>,
+    interval: i32,
+) -> (Vec<RowInfo>, Vec<RowInfo>) {
+    let mut rows = Vec::new();
+    let mut max_rows = Vec::new();
+    let start = start.naive_utc();
+    let end = end.naive_utc();
+
+    let db_rows = sqlx::query!(
+        "SELECT AVG(amps) as amps, MAX(amps) as max_amps, AVG(volts) as volts, AVG(watts) as watts, MAX(watts) as max_watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
+        FROM energy_log
+        INNER JOIN tokens t
+        ON t.token = energy_log.token
+        INNER JOIN users u
+        ON u.id = t.user_id
+        WHERE energy_log.token = ? AND created_at BETWEEN ? AND ?
+        GROUP BY strftime('%s', created_at) / ?
+        ORDER BY created_at DESC",
+        token,
+        start,
+        end,
+        interval
+    )
+    .fetch_all(&mut ***db)
+    .await
+    .unwrap();
+
+    for row in db_rows {
+        let ua = row
+            .user_agent
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown");
+        match (row.location.clone(), row.token.clone(), row.created_at) {
+            (Some(location), Some(token), Some(created_at)) => {
+                rows.push(
+                    RowInfo::new(
+                        &location,
+                        DbToken(token.to_string()),
+                        &created_at.to_string(),
+                        ua,
+                        row.amps,
+                        row.volts,
+                        row.watts,
+                    )
+                );
+                max_rows.push(
+                    RowInfo::new(
+                        &location,
+                        DbToken(token.to_string()),
+                        &created_at.to_string(),
+                        ua,
+                        row.max_amps,
+                        row.volts,
+                        row.max_watts,
+                    )
+                );
+            },
+            (_, _, _) => {
+                log::warn!("Location is None for row {:?}", row);
+            },
+        }
+    }
+
+    (rows, max_rows)
+}
+
+
+fn datetime_to_timestamp(datetime: &str) -> f64 {
+    NaiveDateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S")
+        .expect("DateTime format failed")
+        .and_utc()
+        .timestamp() as f64
+}
+
+
+pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> String {
     use poloto::build;
 
-    let first_timestamp =
-        NaiveDateTime::parse_from_str(&rows.first().unwrap().datetime, "%Y-%m-%d %H:%M:%S")
-            .expect("DateTime format failed")
-            .and_utc()
-            .timestamp();
+    println!("Rows: {:?}", avg_rows.len());
+    println!("Max Rows: {:?}", max_rows.len());
 
-    let amps: Vec<(i128, i128)> = rows
+    let first_timestamp = datetime_to_timestamp(&avg_rows.first().unwrap().datetime);
+
+    let amps: Vec<(f64, f64)> = avg_rows
         .iter()
         .map(|r| {
             (
-                NaiveDateTime::parse_from_str(&r.datetime, "%Y-%m-%d %H:%M:%S")
-                    .unwrap()
-                    .and_utc()
-                    .timestamp() as i128,
-                (r.amps * 1000.0) as i128,
+                datetime_to_timestamp(&r.datetime),
+                r.amps,
             )
         })
         .collect::<Vec<_>>();
     let iter = amps.iter();
 
-    let p = poloto::plots!(poloto::build::plot("amps").line(build::cloned(iter)),);
+    let p = poloto::plots!(
+        poloto::build::plot("avg amps").line(build::cloned(iter)),
+        poloto::build::plot("max amps").line(build::cloned(max_rows.iter().map(|r| (datetime_to_timestamp(&r.datetime), r.amps))))
+    );
 
     let hr = {
         // Calculate so that we don't overflow the labels
-        30 * 60 * (amps.len() as f64 / 2000.0).ceil() as i128
+        30.0 * 60.0 * (amps.len() as f64 / 2000.0).ceil() as f64
     };
 
     let xticks =
-        poloto::ticks::TickDistribution::new(std::iter::successors(Some(0), |w| Some(w + hr)))
+        poloto::ticks::TickDistribution::new(std::iter::successors(Some(0.0), |w| Some(w + hr)))
             .with_tick_fmt(|&v| {
                 format!(
                     "{}",
@@ -189,7 +273,7 @@ pub fn to_svg_plot(rows: Vec<RowInfo>) -> String {
 
     println!(
         "First and last timetamps are: {:?} {:?}",
-        chrono::DateTime::<chrono::Utc>::from_timestamp(first_timestamp, 0)
+        chrono::DateTime::<chrono::Utc>::from_timestamp(first_timestamp as i64, 0)
             .unwrap()
             .format("%H:%M"),
         chrono::DateTime::<chrono::Utc>::from_timestamp(amps.last().unwrap().0 as i64, 0)
