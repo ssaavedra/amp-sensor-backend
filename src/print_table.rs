@@ -249,19 +249,23 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> String {
         poloto::build::plot("max amps").line(build::cloned(max_rows.iter().map(|r| (datetime_to_timestamp(&r.datetime), r.amps))))
     );
 
-    let hr = {
-        // Calculate so that we don't overflow the labels
-        30.0 * 60.0 * (amps.len() as f64 / 2000.0).ceil() as f64
-    };
+    // Configure ticks so that we don't overflow the labels (i.e., at most 10 labels in total)
+    // Calculate last - first and divide by 10 to get the tick interval
+    let tick_interval = (amps.last().unwrap().0 - first_timestamp) / 10.0;
+    println!("Tick interval: {:?}", tick_interval);
+    let tick = tick_interval.abs().ceil();
 
+    // Round to the nearest 30 minutes
+    let tick = (tick / 1800.0).ceil() * 1800.0;
+    
     let xticks =
-        poloto::ticks::TickDistribution::new(std::iter::successors(Some(0.0), |w| Some(w + hr)))
+        poloto::ticks::TickDistribution::new(std::iter::successors(Some(0.0), |w| Some(w + tick)))
             .with_tick_fmt(|&v| {
                 format!(
                     "{}",
                     chrono::DateTime::<chrono::Utc>::from_timestamp(v as i64, 0)
                         .unwrap()
-                        .format("%H:%M")
+                        .format("D%d %H:%M")
                 )
             });
 
