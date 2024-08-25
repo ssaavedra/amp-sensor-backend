@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT AVG(amps) as amps, MAX(amps) as max_amps, AVG(volts) as volts, AVG(watts) as watts, MAX(watts) as max_watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location \n        FROM energy_log\n        INNER JOIN tokens t\n        ON t.token = energy_log.token\n        INNER JOIN users u\n        ON u.id = t.user_id\n        WHERE energy_log.token = ? AND created_at BETWEEN ? AND ?\n        GROUP BY strftime('%s', created_at) / ?\n        ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "amps",
+        "ordinal": 0,
+        "type_info": "Float"
+      },
+      {
+        "name": "max_amps",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "volts",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "watts",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "max_watts",
+        "ordinal": 4,
+        "type_info": "Float"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "user_agent",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "client_ip",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "token",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "location",
+        "ordinal": 9,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1e6ec707114e637e4a4860f0d691fe01baa432c166829204c5c97ae74654e86e"
+}
