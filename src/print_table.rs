@@ -224,12 +224,24 @@ fn datetime_to_timestamp(datetime: &str) -> f64 {
         .timestamp() as f64
 }
 
+/// Create an error type for to_svg_plot when there are no rows to plot
+#[derive(Debug)]
+pub struct NoRowsError;
 
-pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> String {
+impl std::fmt::Display for NoRowsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "No rows to plot")
+    }
+}
+
+impl std::error::Error for NoRowsError {}
+
+pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Result<String> {
     use poloto::build;
 
-    println!("Rows: {:?}", avg_rows.len());
-    println!("Max Rows: {:?}", max_rows.len());
+    if avg_rows.len() < 1 {
+        return Err(NoRowsError.into());
+    }
 
     let first_timestamp = datetime_to_timestamp(&avg_rows.first().unwrap().datetime);
 
@@ -252,7 +264,6 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> String {
     // Configure ticks so that we don't overflow the labels (i.e., at most 10 labels in total)
     // Calculate last - first and divide by 10 to get the tick interval
     let tick_interval = (amps.last().unwrap().0 - first_timestamp) / 10.0;
-    println!("Tick interval: {:?}", tick_interval);
     let tick = tick_interval.abs().ceil();
 
     // Round to the nearest 30 minutes
@@ -275,16 +286,6 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> String {
         .data(p)
         .map_xticks(|_| xticks);
 
-    println!(
-        "First and last timetamps are: {:?} {:?}",
-        chrono::DateTime::<chrono::Utc>::from_timestamp(first_timestamp as i64, 0)
-            .unwrap()
-            .format("%H:%M"),
-        chrono::DateTime::<chrono::Utc>::from_timestamp(amps.last().unwrap().0 as i64, 0)
-            .unwrap()
-            .format("%H:%M")
-    );
-
     data.build_and_label(("Amps over time", "Time", "Amps"))
         .append_to(
             poloto::header()
@@ -293,5 +294,5 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> String {
                 .light_theme(),
         )
         .render_string()
-        .expect("Failed to render SVG")
+        .map_err(anyhow::Error::new)
 }

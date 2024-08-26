@@ -39,7 +39,7 @@
 //!
 use form::ParseableDateTime;
 use governor::Quota;
-use print_table::{get_avg_max_rows_for_token, get_paginated_rows_for_token};
+use print_table::{get_avg_max_rows_for_token, get_paginated_rows_for_token, NoRowsError};
 use rocket::http::ContentType;
 use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
@@ -235,7 +235,16 @@ async fn list_table_svg(
 
     let (avg, max) = get_avg_max_rows_for_token(&mut db, &token, &start, &end, interval).await;
 
-    (ContentType::SVG, print_table::to_svg_plot(avg, max))
+    match print_table::to_svg_plot(avg, max) {
+        Ok(svg) => (ContentType::SVG, svg),
+        Err(e) if e.downcast_ref::<NoRowsError>().is_some() => {
+            (ContentType::Plain, "No data found for the given request".to_string())
+        },
+        Err(e) => {
+            log::error!("Error generating SVG: {:?}", e);
+            (ContentType::Plain, "Error generating SVG".to_string())
+        }
+    }
 }
 
 /// Route GET / will return a simple PONG message. By default we don't advertise
