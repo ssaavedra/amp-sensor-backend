@@ -267,7 +267,7 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Re
     let tick = tick_interval.abs().ceil();
 
     // Round to the nearest 30 minutes
-    let tick = (tick / 1800.0).ceil() * 1800.0;
+    let tick = f64::max(2.0, (tick / 1800.0).ceil() * 1800.0);
     
     let xticks =
         poloto::ticks::TickDistribution::new(std::iter::successors(Some(0.0), |w| Some(w + tick)))
