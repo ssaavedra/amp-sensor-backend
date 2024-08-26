@@ -36,7 +36,8 @@ impl RowInfo {
     fn new(
         location: &str,
         token: DbToken,
-        datetime: &str,
+        datetime: &chrono::NaiveDateTime,
+        tz: &chrono_tz::Tz,
         ua: &str,
         amps: f64,
         volts: f64,
@@ -45,7 +46,7 @@ impl RowInfo {
         Self {
             location: location.to_string(),
             token,
-            datetime: datetime.to_string(),
+            datetime: datetime.and_utc().with_timezone(tz).to_string(),
             ua: ua.to_string(),
             amps,
             volts,
@@ -88,6 +89,7 @@ pub async fn get_paginated_rows_for_token(
     token: &ValidDbToken,
     page: i32,
     count: i32,
+    tz: &chrono_tz::Tz,
 ) -> (Vec<RowInfo>, bool) {
     let mut rows = Vec::new();
     let offset = page * count;
@@ -128,7 +130,8 @@ pub async fn get_paginated_rows_for_token(
         rows.push(RowInfo::new(
             &row.location,
             DbToken(row.token.to_string()),
-            &row.created_at.to_string(),
+            &row.created_at,
+            tz,
             ua,
             row.amps,
             row.volts,
@@ -139,7 +142,6 @@ pub async fn get_paginated_rows_for_token(
 
     (rows, has_next)
 }
-
 
 /// Returns the rows from the database for a given token and page as tuple with
 /// a vector of [RowInfo] structs between the given timestamps. It returns two
@@ -184,41 +186,38 @@ pub async fn get_avg_max_rows_for_token<Tz: chrono::TimeZone>(
             .unwrap_or("Unknown");
         match (row.location.clone(), row.token.clone(), row.created_at) {
             (Some(location), Some(token), Some(created_at)) => {
-                rows.push(
-                    RowInfo::new(
-                        &location,
-                        DbToken(token.to_string()),
-                        &created_at.to_string(),
-                        ua,
-                        row.amps,
-                        row.volts,
-                        row.watts,
-                    )
-                );
-                max_rows.push(
-                    RowInfo::new(
-                        &location,
-                        DbToken(token.to_string()),
-                        &created_at.to_string(),
-                        ua,
-                        row.max_amps,
-                        row.volts,
-                        row.max_watts,
-                    )
-                );
-            },
+                rows.push(RowInfo::new(
+                    &location,
+                    DbToken(token.to_string()),
+                    &created_at,
+                    &chrono_tz::UTC,
+                    ua,
+                    row.amps,
+                    row.volts,
+                    row.watts,
+                ));
+                max_rows.push(RowInfo::new(
+                    &location,
+                    DbToken(token.to_string()),
+                    &created_at,
+                    &chrono_tz::UTC,
+                    ua,
+                    row.max_amps,
+                    row.volts,
+                    row.max_watts,
+                ));
+            }
             (_, _, _) => {
                 log::warn!("Location is None for row {:?}", row);
-            },
+            }
         }
     }
 
     (rows, max_rows)
 }
 
-
 fn datetime_to_timestamp(datetime: &str) -> f64 {
-    NaiveDateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S")
+    NaiveDateTime::parse_from_str(datetime, "%Y-%m-%d %H:%M:%S %Z")
         .expect("DateTime format failed")
         .and_utc()
         .timestamp() as f64
@@ -236,7 +235,11 @@ impl std::fmt::Display for NoRowsError {
 
 impl std::error::Error for NoRowsError {}
 
-pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Result<String> {
+pub fn to_svg_plot<TZ: chrono::TimeZone>(
+    avg_rows: Vec<RowInfo>,
+    max_rows: Vec<RowInfo>,
+    tz: &TZ,
+) -> anyhow::Result<String> where <TZ as chrono::TimeZone>::Offset: std::fmt::Display{
     use poloto::build;
 
     if avg_rows.len() < 1 {
@@ -247,18 +250,17 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Re
 
     let amps: Vec<(f64, f64)> = avg_rows
         .iter()
-        .map(|r| {
-            (
-                datetime_to_timestamp(&r.datetime),
-                r.amps,
-            )
-        })
+        .map(|r| (datetime_to_timestamp(&r.datetime), r.amps))
         .collect::<Vec<_>>();
     let iter = amps.iter();
 
     let p = poloto::plots!(
         poloto::build::plot("avg amps").line(build::cloned(iter)),
-        poloto::build::plot("max amps").line(build::cloned(max_rows.iter().map(|r| (datetime_to_timestamp(&r.datetime), r.amps))))
+        poloto::build::plot("max amps").line(build::cloned(
+            max_rows
+                .iter()
+                .map(|r| (datetime_to_timestamp(&r.datetime), r.amps))
+        ))
     );
 
     // Configure ticks so that we don't overflow the labels (i.e., at most 10 labels in total)
@@ -267,8 +269,8 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Re
     let tick = tick_interval.abs().ceil();
 
     // Round to the nearest 30 minutes
-    let tick = f64::max(2.0, (tick / 1800.0).ceil() * 1800.0);
-    
+    let tick = f64::max(3.0, (tick / 1800.0).ceil() * 1800.0);
+
     let xticks =
         poloto::ticks::TickDistribution::new(std::iter::successors(Some(0.0), |w| Some(w + tick)))
             .with_tick_fmt(|&v| {
@@ -276,6 +278,7 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Re
                     "{}",
                     chrono::DateTime::<chrono::Utc>::from_timestamp(v as i64, 0)
                         .unwrap()
+                        .with_timezone(tz)
                         .format("D%d %H:%M")
                 )
             });
@@ -296,3 +299,5 @@ pub fn to_svg_plot(avg_rows: Vec<RowInfo>, max_rows: Vec<RowInfo>) -> anyhow::Re
         .render_string()
         .map_err(anyhow::Error::new)
 }
+
+

@@ -37,6 +37,7 @@
 //! - New fairings like the EVChargeFairing could be implmented in the future to
 //!   add add other IoT devices or additional functionality.
 //!
+use chrono::TimeZone;
 use form::ParseableDateTime;
 use governor::Quota;
 use print_table::{get_avg_max_rows_for_token, get_paginated_rows_for_token, NoRowsError};
@@ -147,18 +148,19 @@ async fn post_token(
 }
 
 /// Route GET /log/:token/html will return the data in HTML format
-#[get("/log/<_>/html?<page>&<count>", rank = 1)]
+#[get("/log/<_>/html?<page>&<count>&<tz>", rank = 1)]
 async fn list_table_html(
     page: Option<i32>,
     count: Option<i32>,
     token: &ValidDbToken,
+    tz: form::Tz,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
     let page = page.unwrap_or(0);
     let count = count.unwrap_or(10);
 
-    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count).await;
+    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count, &tz.0).await;
 
     let mut result = String::new();
     result.push_str("<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>Consumption info</title></head><body><table>");
@@ -169,6 +171,7 @@ async fn list_table_html(
         result.push_str(&row.to_html());
     }
     result.push_str("\n</table>\n");
+
     if has_next {
         result.push_str(&format!(
             "<a href=\"/log/{}/html?page={}&count={}\">Next</a>",
@@ -177,24 +180,29 @@ async fn list_table_html(
             count
         ));
     }
+
+    // Add svg embedded
+    result.push_str(format!("<hr /><img src=\"/log/{}/svg?tz={}\" alt=\"Energy consumption\" />\n", token.full_token(), tz.0).as_str());
+
     result.push_str("</body></html>\n");
 
     (ContentType::HTML, result)
 }
 
 /// Route GET /log/:token/json will return the data in JSON format
-#[get("/log/<_>/json?<page>&<count>", rank = 1)]
+#[get("/log/<_>/json?<page>&<count>&<tz>", rank = 1)]
 async fn list_table_json(
     page: Option<i32>,
     count: Option<i32>,
     token: &ValidDbToken,
+    tz: form::Tz,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> rocket::response::content::RawJson<String> {
     let page = page.unwrap_or(0);
     let count = count.unwrap_or(10);
 
-    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count).await;
+    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count, &tz.0).await;
 
     let next_url = if has_next {
         format!(
@@ -217,12 +225,13 @@ async fn list_table_json(
 
 
 /// Route GET /log/:token/html will return the data in HTML format
-#[get("/log/<_>/svg?<start>&<end>&<interval>", rank = 1)]
+#[get("/log/<_>/svg?<start>&<end>&<interval>&<tz>", rank = 1)]
 async fn list_table_svg(
     start: Option<ParseableDateTime>,
     end: Option<ParseableDateTime>,
     interval: Option<i32>,
     token: &ValidDbToken,
+    tz: form::Tz,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
@@ -235,7 +244,7 @@ async fn list_table_svg(
 
     let (avg, max) = get_avg_max_rows_for_token(&mut db, &token, &start, &end, interval).await;
 
-    match print_table::to_svg_plot(avg, max) {
+    match print_table::to_svg_plot(avg, max, &tz.0) {
         Ok(svg) => (ContentType::SVG, svg),
         Err(e) if e.downcast_ref::<NoRowsError>().is_some() => {
             (ContentType::Plain, "No data found for the given request".to_string())
