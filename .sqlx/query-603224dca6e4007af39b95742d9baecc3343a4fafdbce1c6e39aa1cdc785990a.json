@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location \n        FROM energy_log\n        INNER JOIN tokens t\n        ON t.token = energy_log.token\n        INNER JOIN users u\n        ON u.id = t.user_id\n        WHERE energy_log.token = ?\n        ORDER BY created_at DESC\n        LIMIT ?\n        OFFSET ?",
+  "query": "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location \n        FROM energy_log\n        INNER JOIN tokens t\n        ON t.token = energy_log.token\n        INNER JOIN users u\n        ON u.id = t.user_id\n        WHERE energy_log.token = ?\n        AND energy_log.created_at BETWEEN ? AND ?\n        ORDER BY created_at DESC\n        LIMIT ?\n        OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -45,7 +45,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 5
     },
     "nullable": [
       false,
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "42675c58c67498c7ba4521a772849b4b53837f61cedc5e627e377a562cd4baee"
+  "hash": "603224dca6e4007af39b95742d9baecc3343a4fafdbce1c6e39aa1cdc785990a"
 }
