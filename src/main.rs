@@ -37,10 +37,11 @@
 //! - New fairings like the EVChargeFairing could be implmented in the future to
 //!   add add other IoT devices or additional functionality.
 //!
-use chrono::TimeZone;
-use form::ParseableDateTime;
+use form::HtmlInputParseableDateTime;
 use governor::Quota;
-use print_table::{get_avg_max_rows_for_token, get_paginated_rows_for_token, NoRowsError};
+use print_table::{
+    get_avg_max_rows_for_token, get_paginated_rows_for_token, NoRowsError, Pagination,
+};
 use rocket::http::ContentType;
 use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
@@ -148,19 +149,30 @@ async fn post_token(
 }
 
 /// Route GET /log/:token/html will return the data in HTML format
-#[get("/log/<_>/html?<page>&<count>&<tz>", rank = 1)]
+#[get("/log/<_>/html?<page>&<count>&<start>&<end>&<interval>&<tz>", rank = 1)]
 async fn list_table_html(
     page: Option<i32>,
     count: Option<i32>,
-    token: &ValidDbToken,
+    start: HtmlInputParseableDateTime,
+    end: HtmlInputParseableDateTime,
+    interval: Option<i32>,
     tz: form::Tz,
+    token: &ValidDbToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
-    let page = page.unwrap_or(0);
-    let count = count.unwrap_or(10);
+    let pagination = Pagination {
+        start,
+        end,
+        interval,
+        page,
+        count,
+        tz: tz.0,
+    };
+    let pagination_result = pagination.result();
 
-    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count, &tz.0).await;
+    let (rows, has_next) =
+        get_paginated_rows_for_token(&mut db, &token, &pagination_result, &tz.0).await;
 
     let mut result = String::new();
     result.push_str("<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>Consumption info</title></head><body><table>");
@@ -174,15 +186,54 @@ async fn list_table_html(
 
     if has_next {
         result.push_str(&format!(
-            "<a href=\"/log/{}/html?page={}&count={}\">Next</a>",
+            "<a href=\"/log/{}/html?page={}&count={}&tz={}\">Next</a>",
             token.full_token(),
-            page + 1,
-            count
+            pagination_result.page + 1,
+            pagination_result.count,
+            tz.0,
         ));
     }
 
     // Add svg embedded
-    result.push_str(format!("<hr /><img src=\"/log/{}/svg?tz={}\" alt=\"Energy consumption\" />\n", token.full_token(), tz.0).as_str());
+    result.push_str(
+        format!(
+            "
+    <form action=\"/log/{}/html\" method=\"get\">
+        <input type=\"hidden\" name=\"tz\" value=\"{}\" />
+        <input type=\"hidden\" name=\"page\" value=\"{}\" />
+        <input type=\"hidden\" name=\"count\" value=\"{}\" />
+        <label for=\"start\">Start:</label>
+        <input type=\"datetime-local\" id=\"start\" name=\"start\" value=\"{}\" />
+        <label for=\"end\">End:</label>
+        <input type=\"datetime-local\" id=\"end\" name=\"end\" value=\"{}\" />
+        <label for=\"interval\">Interval (seconds):</label>
+        <input type=\"number\" id=\"interval\" name=\"interval\" value=\"{}\" />
+        <input type=\"submit\" value=\"Submit\" />
+    </form>",
+            token.full_token(),
+            tz.0,
+            pagination_result.page,
+            pagination_result.count,
+            pagination.start.to_datetime_local(),
+            pagination.end.to_datetime_local(),
+            pagination
+                .interval
+                .map_or_else(|| "".to_string(), |i| i.to_string()),
+        )
+        .as_str(),
+    );
+    result.push_str(
+        format!(
+            "<hr />
+    <img src=\"/log/{}/svg?tz={}&start={}&end={}&interval={}\" alt=\"Energy consumption\" />\n",
+            token.full_token(),
+            tz.0,
+            pagination_result.start.with_timezone(&tz.0).format("%Y-%m-%dT%H:%M"),
+            pagination_result.end.with_timezone(&tz.0).format("%Y-%m-%dT%H:%M"),
+            pagination_result.interval,
+        )
+        .as_str(),
+    );
 
     result.push_str("</body></html>\n");
 
@@ -190,26 +241,36 @@ async fn list_table_html(
 }
 
 /// Route GET /log/:token/json will return the data in JSON format
-#[get("/log/<_>/json?<page>&<count>&<tz>", rank = 1)]
+#[get("/log/<_>/json?<page>&<count>&<start>&<end>&<interval>&<tz>", rank = 1)]
 async fn list_table_json(
     page: Option<i32>,
     count: Option<i32>,
-    token: &ValidDbToken,
+    start: HtmlInputParseableDateTime,
+    end: HtmlInputParseableDateTime,
+    interval: Option<i32>,
     tz: form::Tz,
+    token: &ValidDbToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> rocket::response::content::RawJson<String> {
-    let page = page.unwrap_or(0);
-    let count = count.unwrap_or(10);
+    let pagination = Pagination {
+        start,
+        end,
+        interval,
+        page,
+        count,
+        tz: tz.0,
+    }
+    .result();
 
-    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, page, count, &tz.0).await;
+    let (rows, has_next) = get_paginated_rows_for_token(&mut db, &token, &pagination, &tz.0).await;
 
     let next_url = if has_next {
         format!(
             "/log/{}/json?page={}&count={}",
             token.full_token(),
-            page + 1,
-            count
+            pagination.page + 1,
+            pagination.count
         )
     } else {
         "".to_string()
@@ -223,32 +284,32 @@ async fn list_table_json(
     rocket::response::content::RawJson(serde_json::to_string_pretty(&result).unwrap())
 }
 
-
 /// Route GET /log/:token/html will return the data in HTML format
 #[get("/log/<_>/svg?<start>&<end>&<interval>&<tz>", rank = 1)]
 async fn list_table_svg(
-    start: Option<ParseableDateTime>,
-    end: Option<ParseableDateTime>,
+    start: HtmlInputParseableDateTime,
+    end: HtmlInputParseableDateTime,
     interval: Option<i32>,
-    token: &ValidDbToken,
     tz: form::Tz,
+    token: &ValidDbToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
-    let start = start
-        .unwrap_or(ParseableDateTime(
-            chrono::Utc::now() - chrono::Duration::days(1),
-        ));
-    let end = end.unwrap_or(ParseableDateTime(chrono::Utc::now()));
+    let start = start.with_tz(tz.0, true).with_default(chrono::Utc::now() - chrono::Duration::days(1)).utc();
+    let end = end
+        .with_tz(tz.0, false)
+        .with_default(chrono::Utc::now())
+        .utc();
     let interval = interval.unwrap_or(300);
 
     let (avg, max) = get_avg_max_rows_for_token(&mut db, &token, &start, &end, interval).await;
 
     match print_table::to_svg_plot(avg, max, &tz.0) {
         Ok(svg) => (ContentType::SVG, svg),
-        Err(e) if e.downcast_ref::<NoRowsError>().is_some() => {
-            (ContentType::Plain, "No data found for the given request".to_string())
-        },
+        Err(e) if e.downcast_ref::<NoRowsError>().is_some() => (
+            ContentType::Plain,
+            "No data found for the given request".to_string(),
+        ),
         Err(e) => {
             log::error!("Error generating SVG: {:?}", e);
             (ContentType::Plain, "Error generating SVG".to_string())

@@ -11,7 +11,63 @@ use chrono::{DateTime, NaiveDateTime};
 use rocket_db_pools::Connection;
 use serde::Serialize;
 
-use crate::token::{DbToken, Token, ValidDbToken};
+use crate::{
+    form::HtmlInputParseableDateTime,
+    token::{DbToken, Token, ValidDbToken},
+};
+
+pub struct Pagination {
+    pub page: Option<i32>,
+    pub count: Option<i32>,
+    pub start: HtmlInputParseableDateTime,
+    pub end: HtmlInputParseableDateTime,
+    pub tz: chrono_tz::Tz,
+    pub interval: Option<i32>,
+}
+
+pub struct PaginationResult {
+    pub page: i32,
+    pub count: i32,
+    pub start: DateTime<chrono::Utc>,
+    pub end: DateTime<chrono::Utc>,
+    pub interval: i32,
+    pub offset: i32,
+}
+
+impl Pagination {
+    pub fn result(&self) -> PaginationResult {
+        let page = self.page.unwrap_or(1);
+        let default_count = {
+            if self.start.is_some() && self.end.is_some() {
+                10000000
+            } else {
+                10
+            }
+        };
+        let count = self.count.unwrap_or(default_count);
+        let start = self
+            .start
+            .with_tz(self.tz, true)
+            .with_default(chrono::Utc::now() - chrono::Duration::days(1))
+            .utc();
+        let end = self
+            .end
+            .with_tz(self.tz, false)
+            .with_default(chrono::Utc::now())
+            .utc();
+        let interval = self.interval.unwrap_or(300);
+        let offset = (page - 1) * count;
+
+        PaginationResult {
+            page,
+            count,
+            start,
+            end,
+            interval,
+            offset,
+        }
+    }
+}
 
 pub struct RowInfo {
     location: String,
@@ -87,13 +143,23 @@ impl RowInfo {
 pub async fn get_paginated_rows_for_token(
     db: &mut Connection<crate::Logs>,
     token: &ValidDbToken,
-    page: i32,
-    count: i32,
+    pagination: &PaginationResult,
     tz: &chrono_tz::Tz,
 ) -> (Vec<RowInfo>, bool) {
     let mut rows = Vec::new();
-    let offset = page * count;
-    let db_count = count + 1; // Fetch one more row to check if there are still more rows
+    let PaginationResult {
+        page: _,
+        interval: _,
+        count,
+        start,
+        end,
+        offset,
+    } = pagination;
+    let count = *count;
+    let offset = *offset;
+    let db_count = count + 1;
+    let start = start.format("%Y-%m-%d %H:%M:%S").to_string();
+    let end = end.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let db_rows = sqlx::query!(
         "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
@@ -103,10 +169,13 @@ pub async fn get_paginated_rows_for_token(
         INNER JOIN users u
         ON u.id = t.user_id
         WHERE energy_log.token = ?
+        AND energy_log.created_at BETWEEN ? AND ?
         ORDER BY created_at DESC
         LIMIT ?
         OFFSET ?",
         token,
+        start,
+        end,
         db_count,
         offset
     )
@@ -239,7 +308,10 @@ pub fn to_svg_plot<TZ: chrono::TimeZone>(
     avg_rows: Vec<RowInfo>,
     max_rows: Vec<RowInfo>,
     tz: &TZ,
-) -> anyhow::Result<String> where <TZ as chrono::TimeZone>::Offset: std::fmt::Display{
+) -> anyhow::Result<String>
+where
+    <TZ as chrono::TimeZone>::Offset: std::fmt::Display,
+{
     use poloto::build;
 
     if avg_rows.len() < 1 {
@@ -255,12 +327,12 @@ pub fn to_svg_plot<TZ: chrono::TimeZone>(
     let iter = amps.iter();
 
     let p = poloto::plots!(
-        poloto::build::plot("avg amps").line(build::cloned(iter)),
         poloto::build::plot("max amps").line(build::cloned(
             max_rows
                 .iter()
                 .map(|r| (datetime_to_timestamp(&r.datetime), r.amps))
-        ))
+        )),
+        poloto::build::plot("avg amps").line(build::cloned(iter))
     );
 
     // Configure ticks so that we don't overflow the labels (i.e., at most 10 labels in total)
@@ -299,5 +371,3 @@ pub fn to_svg_plot<TZ: chrono::TimeZone>(
         .render_string()
         .map_err(anyhow::Error::new)
 }
-
-
