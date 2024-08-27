@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as count FROM view_tokens WHERE token = ? AND (view_token_valid_until is null OR view_token_valid_until > datetime(\"NOW\"))",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "84c94a42edaf93c472b26026b5b317765b14203759d21b02637b125c7e31e255"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE view_tokens SET last_accessed_at = ? WHERE token = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6b09783989b873e1fb176b3bf696fe54ad4b264aa4b7f1d0031720ebff9afed1"
+}

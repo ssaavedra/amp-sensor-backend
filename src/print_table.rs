@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::{
     form::HtmlInputParseableDateTime,
-    token::{DbToken, Token, ValidDbToken},
+    token::{DbToken, Token, ValidViewToken},
 };
 
 pub struct Pagination {
@@ -142,7 +142,7 @@ impl RowInfo {
 /// rows to be fetched.
 pub async fn get_paginated_rows_for_token(
     db: &mut Connection<crate::Logs>,
-    token: &ValidDbToken,
+    token: &ValidViewToken,
     pagination: &PaginationResult,
     tz: &chrono_tz::Tz,
 ) -> (Vec<RowInfo>, bool) {
@@ -162,13 +162,15 @@ pub async fn get_paginated_rows_for_token(
     let end = end.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let db_rows = sqlx::query!(
-        "SELECT amps, volts, watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
+        "SELECT amps, volts, watts, energy_log.created_at as created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
         FROM energy_log
         INNER JOIN tokens t
         ON t.token = energy_log.token
         INNER JOIN users u
         ON u.id = t.user_id
-        WHERE energy_log.token = ?
+        INNER JOIN view_tokens vt
+        ON vt.user_id = u.id
+        WHERE vt.token = ?
         AND energy_log.created_at BETWEEN ? AND ?
         ORDER BY created_at DESC
         LIMIT ?
@@ -218,7 +220,7 @@ pub async fn get_paginated_rows_for_token(
 /// interval passed as a parameter.
 pub async fn get_avg_max_rows_for_token<Tz: chrono::TimeZone>(
     db: &mut Connection<crate::Logs>,
-    token: &ValidDbToken,
+    token: &ValidViewToken,
     start: &DateTime<Tz>,
     end: &DateTime<Tz>,
     interval: i32,
@@ -229,14 +231,16 @@ pub async fn get_avg_max_rows_for_token<Tz: chrono::TimeZone>(
     let end = end.naive_utc();
 
     let db_rows = sqlx::query!(
-        "SELECT AVG(amps) as amps, MAX(amps) as max_amps, AVG(volts) as volts, AVG(watts) as watts, MAX(watts) as max_watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
+        "SELECT AVG(amps) as amps, MAX(amps) as max_amps, AVG(volts) as volts, AVG(watts) as watts, MAX(watts) as max_watts, energy_log.created_at as created_at, user_agent, client_ip, energy_log.token as token, u.location as location 
         FROM energy_log
         INNER JOIN tokens t
         ON t.token = energy_log.token
         INNER JOIN users u
         ON u.id = t.user_id
-        WHERE energy_log.token = ? AND created_at BETWEEN ? AND ?
-        GROUP BY strftime('%s', created_at) / ?
+        INNER JOIN view_tokens vt
+        ON vt.user_id = u.id
+        WHERE vt.token = ? AND energy_log.created_at BETWEEN ? AND ?
+        GROUP BY strftime('%s', energy_log.created_at) / ?
         ORDER BY created_at DESC",
         token,
         start,

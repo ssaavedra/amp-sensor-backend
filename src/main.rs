@@ -47,7 +47,7 @@ use rocket::serde::{json::Json, Deserialize};
 use rocket::{catchers, fairing, get, launch, post, routes};
 use rocket_db_pools::{sqlx, Connection, Database};
 use rocket_governor::{rocket_governor_catcher, RocketGovernable, RocketGovernor};
-use token::{Token, ValidDbToken};
+use token::{Token, ValidDbToken, ValidViewToken};
 
 mod alive_check;
 mod car;
@@ -148,6 +148,13 @@ async fn post_token(
     format!("OK")
 }
 
+#[get("/log/<_>/check")]
+async fn check_token_valid(
+    token: &ValidDbToken,
+) -> String {
+    format!("Token {} is valid", token.simplified())
+}
+
 /// Route GET /log/:token/html will return the data in HTML format
 #[get("/log/<_>/html?<page>&<count>&<start>&<end>&<interval>&<tz>", rank = 1)]
 async fn list_table_html(
@@ -157,7 +164,7 @@ async fn list_table_html(
     end: HtmlInputParseableDateTime,
     interval: Option<i32>,
     tz: form::Tz,
-    token: &ValidDbToken,
+    token: &ValidViewToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {
@@ -249,7 +256,7 @@ async fn list_table_json(
     end: HtmlInputParseableDateTime,
     interval: Option<i32>,
     tz: form::Tz,
-    token: &ValidDbToken,
+    token: &ValidViewToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> rocket::response::content::RawJson<String> {
@@ -291,7 +298,7 @@ async fn list_table_svg(
     end: HtmlInputParseableDateTime,
     interval: Option<i32>,
     tz: form::Tz,
-    token: &ValidDbToken,
+    token: &ValidViewToken,
     mut db: Connection<Logs>,
     _ratelimit: RocketGovernor<'_, RateLimitGuard>,
 ) -> (ContentType, String) {

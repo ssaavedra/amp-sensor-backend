@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT AVG(amps) as amps, MAX(amps) as max_amps, AVG(volts) as volts, AVG(watts) as watts, MAX(watts) as max_watts, created_at, user_agent, client_ip, energy_log.token as token, u.location as location \n        FROM energy_log\n        INNER JOIN tokens t\n        ON t.token = energy_log.token\n        INNER JOIN users u\n        ON u.id = t.user_id\n        WHERE energy_log.token = ? AND created_at BETWEEN ? AND ?\n        GROUP BY strftime('%s', created_at) / ?\n        ORDER BY created_at DESC",
+  "query": "SELECT AVG(amps) as amps, MAX(amps) as max_amps, AVG(volts) as volts, AVG(watts) as watts, MAX(watts) as max_watts, energy_log.created_at as created_at, user_agent, client_ip, energy_log.token as token, u.location as location \n        FROM energy_log\n        INNER JOIN tokens t\n        ON t.token = energy_log.token\n        INNER JOIN users u\n        ON u.id = t.user_id\n        INNER JOIN view_tokens vt\n        ON vt.user_id = u.id\n        WHERE vt.token = ? AND energy_log.created_at BETWEEN ? AND ?\n        GROUP BY strftime('%s', energy_log.created_at) / ?\n        ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -70,5 +70,5 @@
       true
     ]
   },
-  "hash": "1e6ec707114e637e4a4860f0d691fe01baa432c166829204c5c97ae74654e86e"
+  "hash": "d5a4b0b60898f19edf5c59a9573ed5604e30ad8414d0645ad667295822930064"
 }
